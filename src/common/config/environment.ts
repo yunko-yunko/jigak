@@ -88,6 +88,7 @@ export function validateEnvironment(env: NodeJS.ProcessEnv) {
         'AUTH_TOKEN_ENCRYPTION_KEY',
       ]);
     }
+
     for (const field of ['AUTH_PUBLIC_BASE_URL', 'AUTH_WEB_RETURN_URL'] as const) {
       if (new URL(config[field]).protocol !== 'https:') {
         throw new EnvironmentConfigurationError(`${field}: 운영에서는 HTTPS여야 합니다.`, [field]);

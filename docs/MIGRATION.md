@@ -147,7 +147,7 @@ contextual/journey 모델은 `eta_models`에 저장하고 `eta_learning_state.re
 
 ## 검증 범위와 실제 운영에서 확인할 항목
 
-Node.js 24.11 이상에서 `npm ci` → `npm run build` → `npm run migration:run` → `npm start` 순서로 운영 실행물을 준비합니다. `npm run typecheck`, `npm test`로 타입과 회귀 테스트를 검증합니다. 빌드는 TypeScript ESM과 SQL/JSON/CSV 실행 자산을 `dist`에 생성합니다.
+Node.js 24.11 이상에서 `npm ci` → `npm run build` → `npm start` 순서로 운영 실행물을 준비합니다. 서버 시작 시 잠금이 있는 TypeORM 마이그레이션을 먼저 적용하므로 GitHub 연결 배포에서도 별도 Job이 필요하지 않습니다. 수동 적용이 필요하면 `npm run migration:run`을 사용할 수 있습니다. `npm run typecheck`, `npm test`로 타입과 회귀 테스트를 검증합니다. 빌드는 TypeScript ESM과 SQL/JSON/CSV 실행 자산을 `dist`에 생성합니다.
 
 20개 레거시 핵심 엔진 테스트 파일에 포함된 210개 사례를 보존했고, 별도 OAuth/계정/학습 PostgreSQL 테스트를 추가했습니다. 회귀 테스트는 그래프 최적성/도달성, 대기·자원 제약, 보행 geometry와 HTTP 수명주기, 호출 예산, 인벤토리/GBFS, 도로 지연·공급원 신선도, 공개 버스 보정과 공간 모델의 수치 재현을 다룹니다. 테스트용 수치 fixture는 학습 완료 데이터나 운영 모델로 사용하지 않습니다.
 

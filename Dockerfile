@@ -24,5 +24,5 @@ COPY --from=build --chown=node:node /app/dist ./dist
 COPY --chown=node:node package.json package-lock.json ./
 USER node
 EXPOSE 8080
-# Schema changes run in a separate Cloud Run Job, never during service startup.
+# Nest initializes the database and applies locked TypeORM migrations before listening.
 CMD ["node", "dist/main.js"]
