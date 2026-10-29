@@ -1,0 +1,19 @@
+# Generated files and installed dependencies.
+node_modules/
+dist/
+coverage/
+*.log
+
+# Private runtime data and deployment credentials.
+/data/
+.env
+.env.*
+deploy/cloud-run.env.yaml
+
+# Raw schema bytes are used to verify applied migration checksums.
+src/common/database/schema.sql
+src/modules/auth/repository/schema.sql
+src/modules/learning/repository/schema.sql
+
+# Original EUC-KR reference data has a verified SHA-256 digest.
+*.csv

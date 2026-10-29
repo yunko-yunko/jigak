@@ -1,0 +1,53 @@
+# Local PostgreSQL development environment; Cloud Run uses Cloud SQL instead.
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: jigakmap
+      POSTGRES_USER: jigakmap
+      POSTGRES_PASSWORD: local-development-only
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U jigakmap -d jigakmap']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  migrate:
+    build: .
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: '5432'
+      DB_NAME: jigakmap
+      DB_USER: jigakmap
+      DB_PASSWORD: local-development-only
+      DB_SSL: 'false'
+    command: ['node', 'dist/common/database/migrate.js']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+  api:
+    build: .
+    env_file: .env
+    environment:
+      NODE_ENV: development
+      HOST: 0.0.0.0
+      PORT: '8080'
+      DB_HOST: postgres
+      DB_PORT: '5432'
+      DB_NAME: jigakmap
+      DB_USER: jigakmap
+      DB_PASSWORD: local-development-only
+      DB_SSL: 'false'
+    ports:
+      - '127.0.0.1:8080:8080'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    init: true
+volumes:
+  postgres-data:

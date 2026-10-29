@@ -1,0 +1,45 @@
+{
+  "name": "jigak-map-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "지각지도 NestJS / Cloud Run backend",
+  "engines": {
+    "node": ">=24.11.0"
+  },
+  "scripts": {
+    "format": "prettier --write . --ignore-unknown",
+    "format:check": "prettier --check . --ignore-unknown",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
+    "start": "node --env-file-if-exists=.env dist/main.js",
+    "start:dev": "node --env-file-if-exists=.env --import tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test --test-concurrency=2 tests/*.test.ts",
+    "migration:run": "node --env-file-if-exists=.env dist/common/database/migrate.js",
+    "env:deployment": "node scripts/deployment-env.mjs",
+    "migration:generate": "node --env-file-if-exists=.env --import tsx ./node_modules/typeorm/cli.js migration:generate -d src/common/database/cli-data-source.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.1.0",
+    "@nestjs/core": "^11.1.0",
+    "@nestjs/platform-express": "^11.1.0",
+    "@nestjs/typeorm": "12.0.2",
+    "express": "^5.1.0",
+    "jose": "^6.1.0",
+    "pg": "^8.16.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "typeorm": "1.1.2",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.0",
+    "@nestjs/testing": "^11.1.0",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
+    "prettier": "3.9.10",
+    "tsx": "^4.20.0",
+    "typescript": "~5.9.3"
+  }
+}
