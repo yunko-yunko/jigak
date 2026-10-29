@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { MigrationExecutor, type QueryRunner } from 'typeorm';
 import { DatabaseService } from './database.service.js';
 import { createDataSource } from './data-source.js';
+import { startupFailure } from '../startup-diagnostics.js';
 import {
   LegacySchemaMigrationEntity,
   TypeOrmMigrationHistoryEntity,
@@ -101,20 +102,21 @@ export async function runMigrations(database: DatabaseService) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const dataSource = createDataSource();
+  let dataSource: ReturnType<typeof createDataSource> | undefined;
 
   try {
+    dataSource = createDataSource();
+
     await dataSource.initialize();
     await runMigrations(new DatabaseService(dataSource));
 
     console.info('TypeORM database migration complete.');
-  } catch {
-    console.error(
-      'TypeORM migration failed. Check configuration, permissions and migration history.',
-    );
+  } catch (error: unknown) {
+    console.error(JSON.stringify(startupFailure(error, 'migration')));
+
     process.exitCode = 1;
   } finally {
-    if (dataSource.isInitialized) {
+    if (dataSource?.isInitialized) {
       await dataSource.destroy();
     }
   }
