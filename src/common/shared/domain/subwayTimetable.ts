@@ -5,7 +5,7 @@ import type {
   SubwayTimetable,
   TimeRange,
 } from './types.js';
-import { REALTIME_BOARDING_BUFFER_SECONDS } from './waitEstimates.js';
+import { headwayRunsFrom, TIMETABLE_BOARDING_BUFFER_SECONDS } from './waitEstimates.js';
 
 const norm = (value: string) =>
   value
@@ -66,7 +66,7 @@ export function timetableIsFresh(
 
 /** A later express may overtake an earlier local. Minimize arrival, then departure. */
 export function bestScheduledTrip(table: SubwayTimetable, reachAt: number) {
-  const cutoff = reachAt + REALTIME_BOARDING_BUFFER_SECONDS.subway * 1000;
+  const cutoff = reachAt + TIMETABLE_BOARDING_BUFFER_SECONDS * 1000;
   let best: SubwayTimetable['departures'][number] | null = null;
 
   for (const row of table.departures) {
@@ -122,7 +122,7 @@ export function scheduledDepartures(
     return null;
   }
 
-  const buffer = REALTIME_BOARDING_BUFFER_SECONDS.subway * 1000;
+  const buffer = TIMETABLE_BOARDING_BUFFER_SECONDS * 1000;
   const probes = [reach.earliest, reach.latest];
 
   for (const row of table.departures) {
@@ -187,7 +187,9 @@ export function scheduledDepartures(
   };
 }
 
-/** A complete current-day snapshot can rule out a departure, but unavailable snapshots never can. */
+/** A complete current-day snapshot can rule out a departure of its own service day, but unavailable snapshots never
+ * can, and neither can it rule out the next day's first trains that the boarding's dated headway evidence holds: a
+ * rider past the last train, or before 05:00, waits for the first one. */
 export function publishedServiceEnded(
   segment: BaseSegment,
   reach: TimeRange,
@@ -201,7 +203,8 @@ export function publishedServiceEnded(
     reach.earliest >= table.validFrom &&
     reach.latest < table.validUntil &&
     table.departures.every(
-      (row) => row.departureAt < reach.latest + REALTIME_BOARDING_BUFFER_SECONDS.subway * 1000,
-    )
+      (row) => row.departureAt < reach.latest + TIMETABLE_BOARDING_BUFFER_SECONDS * 1000,
+    ) &&
+    !headwayRunsFrom(segment, table.validUntil)
   );
 }

@@ -152,7 +152,7 @@ export function describeRouteTiming(
         ? 'demo'
         : freshArrival
           ? 'live-arrival'
-          : segment.etaPrediction || segment.publicEtaPrediction
+          : segment.etaPrediction || segment.publicEtaPrediction || segment.railEtaPrediction
             ? 'learned-estimate'
             : estimatedAction && !segment.id.endsWith('-provider-extra')
               ? 'rule-estimate'
@@ -178,7 +178,9 @@ export function describeRouteTiming(
         : basis === 'learned-estimate'
           ? segment.publicEtaPrediction
             ? '서울 교통카드 운행 기록 학습 · 공급원 예상의 늦은 범위 보정'
-            : '완료 이동으로 학습한 문맥 ETA · 실시간 측정값 아님'
+            : segment.railEtaPrediction
+              ? '서울 교통카드 지하철 개찰 기록 학습 · 역 안 이동을 포함한 늦은 범위 보정'
+              : '완료 이동으로 학습한 문맥 ETA · 실시간 측정값 아님'
           : basis === 'rule-estimate'
             ? '앱의 예상 여유'
             : basis === 'demo'
@@ -245,8 +247,9 @@ export function describeRouteTiming(
   if (
     route.segments.some(
       (segment) =>
-        ['walk', 'run', 'bicycle', 'scooter', 'bus', 'car', 'taxi'].includes(segment.mode) &&
-        segment.distanceMeters > 0,
+        ['walk', 'run', 'bicycle', 'scooter', 'ebike', 'bus', 'car', 'taxi'].includes(
+          segment.mode,
+        ) && segment.distanceMeters > 0,
     )
   ) {
     unavailableFactors.push('live-signal');
@@ -304,6 +307,12 @@ export function describeRouteTiming(
   if (route.segments.some((segment) => segment.etaPrediction)) {
     notes.push(
       '완료 이동의 날씨·시간대·도로·대기 문맥으로 학습한 ETA를 사용합니다. 관측된 차량 도착예정을 덮어쓰지 않으며 도착 확률을 보장하지 않습니다.',
+    );
+  }
+
+  if (route.segments.some((segment) => segment.railEtaPrediction)) {
+    notes.push(
+      '서울 교통카드의 지하철 개찰 기록(승차 개찰부터 하차 개찰까지)으로 학습한 범위로 지하철 구간의 늦은 범위만 넓혔습니다. 역 안 이동과 놓친 열차를 포함하며, 예상 도착시각과 공급원 소요는 바꾸지 않습니다.',
     );
   }
 

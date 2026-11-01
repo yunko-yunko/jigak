@@ -153,6 +153,22 @@ Node.js 24.11 이상에서 `npm ci` → `npm run build` → `npm start` 순서�
 
 실제 GCP 리소스 생성/배포, Cloud SQL 실접속, 실제 공급원 인증/조회와 사용자의 Google·카카오·Apple 로그인은 실행하지 않았습니다. 단위/통합 테스트의 모의 응답과 PGlite 기반 저장소 검증은 이 운영 확인을 대신하지 않습니다. 외부 문의 발송/답변, 푸시 전달, 제공사 앱 심사, Apple 서버 알림은 기존에도 연결되지 않은 기능이며 이번 이관에서 구현 완료로 표시하지 않습니다.
 
+## 2026-10-29 기존 서버 변경 동기화
+
+처음 이관한 엔진은 원본 저장소의 `mvp/server` 커밋 `0bf0269`(2026-10-18)와 import 경로·서식만 다르고 같았습니다(AST 토큰 비교). 그 뒤 원본에 들어간 변경을 같은 방식으로 옮겼습니다. `errors.ts`, `intelligence/learning-service.ts`, `intelligence/observation-store.ts`, 인증은 이 저장소에서 다시 쓴 파일이라 덮어쓰지 않았습니다.
+
+- 엔진·공유 코드: 원본의 커밋 `d324f42`, `b65b654`와 공휴일 처리 작업(미커밋) 기준. 따릉이 대여·반납 0분, 대여소 쌍별 실측 자전거 시간(`BICYCLE_RIDE_TIMES_PATH`), OSRM 자전거망(`BICYCLE_OSRM_URL`), 보행 두 번째 의견과 대안, 보행 신호 대기(`TRAFFIC_SIGNAL_API_KEY`), 지하철 노선 실시간 열차 위치, 버스 모델 `public-bus-duration-v3`(공휴일·대체공휴일을 일요일로 읽음, v2도 읽음), 구간 보정 HGB(`ETA_HGB_MODEL_PATH`), 요청당 호출 예산 72(최대 96).
+- 경로 검색(`route-search.ts`): 대중교통 후보마다 처음·마지막 도보 확인, 선택 단계 2.5초 제한, 자전거 경로 미리 받기, 신호 대기 반영, 같은 차량 조합의 느린 도보 변형 제거, 탐색 한도 안내 문구 제거.
+- 새 API: `POST /api/travel-times`(분당 10회), `GET /api/realtime/subway/line`. 카카오 키가 없을 때 시간 비교용 등록 장소 검색.
+- 학습 서비스: HGB 체크포인트를 읽고, 이동 기록이 삭제되면(다른 인스턴스 포함, DB 상태로 확인) 끕니다.
+- 공간 버스 모델 `seoul-bus-spatial-v3`(10/29): `ETA_SPATIAL_BUS_MODEL_PATH`. 버스 구간마다 이 모델을 먼저 쓰고(`BusEnvelopeRuntime`), 못 쓰는 구간은 공개 버스 모델이 맡습니다. 학습·평가·주간 갱신은 원본 저장소 `docs/2026-10-29-spatial-bus-v3.md`, 회귀 테스트는 `tests/engine-spatialBusV3.test.ts`.
+- 따릉이 공간 모델 `seoul-bicycle-spatial-v2`(10/29): `ETA_SPATIAL_BICYCLE_MODEL_PATH`. `MobilityFeeds.bikeModel`로 읽고 `/api/health`의 `models.bicycleRide`에 상태를 보여 줍니다. `multimodal.ts`의 대여소 쌍 선별과 최종 자전거 구간에서 실측표가 없을 때 이 모델을 쓰고, 그다음이 OSRM입니다. 근거는 원본 저장소 `docs/2026-10-29-spatial-bicycle-v2.md`, 회귀 테스트는 `tests/engine-spatialBicycleRide.test.ts`.
+- 지하철 개찰 모델 `seoul-rail-gate-v1`(10/29): `ETA_RAIL_GATE_MODEL_PATH`. `RailGateModelService`를 `routing-options.ts`의 `railGate`로 구성하고 `/api/health`의 `models.railGate`에 상태를 보여 줍니다. `route-search.ts`가 최종 `planBaseRoutes` 직전에 `applyRailGateEnvelope`로 지하철 구간의 늦은 범위만 넓힙니다. 시간표 검증(`shared/domain/routing.ts`의 `evaluateBaseTimeline`)이 넓힌 만큼을 따로 다루도록 고쳤습니다(고치기 전에는 시간표 지하철 경로가 통째로 빠졌습니다). 근거는 원본 저장소 `docs/2026-10-29-transit-learning.md`, 회귀 테스트는 `tests/engine-railGate.test.ts`, `tests/engine-railGateTimeline.test.ts`.
+- 경로 검색 속도(10/29): 결과는 그대로 두고 단계 순서만 바꿨습니다. 신호 위상을 시간표·도로 속도와 함께 읽고(`prepareSignalWaits`), 지하철 시간표를 한꺼번에 받고(검색당 14건 상한은 같은 순서로 사용), 직행 택시·라운드 중 택시 비교·마지막 세 묶음을 대여 조합과 겹치고(남은 호출이 빠듯하면 예전처럼 기다림, `CallBudget.closed`), 중간역 첫 장소 검색을 출발 도보 확인과 함께 합니다. 같은 응답을 같은 네트워크 시간으로 재생했을 때 5개 구간에서 12~41% 빨라졌고, 응답을 즉시 돌려줄 때 결과 해시가 같았습니다. 수치와 결과가 달라질 수 있는 경우는 원본 저장소 `docs/2026-10-29-search-speed.md`.
+- 실행 자산 누락 수정: `.gitignore`·`.gcloudignore`의 `data` 규칙이 `src/common/engine/realtime/data`(공휴일 달력)와 `connectivity/data`(역내 환승 표)까지 빼고 있어서 클론한 저장소와 Cloud Build 업로드에 이 파일들이 없었습니다. 루트 `/data`만 제외하도록 고치고 파일을 넣었습니다. 공휴일 JSON은 해시를 기록하므로 서식 대상에서 뺐습니다.
+- 테스트: 바뀐 엔진 회귀 테스트 6개를 원본 최신본으로 바꾸고, 새 기능 테스트 11개(주차 시간, 대여 연속, 보행 대안·복원, 승강장 이름, 렌터카, 킥보드 기기, 지하철 노선, 보행 신호, HGB 학습, 버스 공휴일)를 옮겼습니다. 앱 화면(`createApp`)에 묶인 원본 테스트는 옮기지 않았습니다.
+- 확인: `npm run typecheck`, `npm test`(318개 중 316개 통과, 2개 건너뜀). 로컬 PostgreSQL에서 마이그레이션 후 앱 웹 화면으로 장소 검색, 서울역→선린인터넷고 경로 검색, 지하철 실시간 열차 위치를 이 서버로 확인했습니다.
+
 ## SQL 직접 실행에서 TypeORM으로 변경
 
 계정 8개·학습 6개·공통 요청 제한·잠금 엔티티를 EntitySchema로 명시했습니다. DB의 snake_case 이름은 유지하며 bigint 시간/카운터는 안전 정수 transformer로 변환합니다. API/도메인 DTO와 ORM 레코드는 분리합니다. 직접 `pg.Pool`, `client.query()`를 사용하던 코드와 테스트용 수동 SQL 저장소 어댑터는 제거했습니다. 학습 revision과 두 체크포인트는 하나의 LEFT JOIN QueryBuilder 조회로 읽어 일관된 스냅샷을 유지합니다.

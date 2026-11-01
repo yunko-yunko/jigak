@@ -132,30 +132,15 @@ export const DEMO_TEMPLATES: DemoTemplate[] = [
     destinationId: 'city-hall',
     mode: 'subway',
     accessMeters: 300,
-    accessSeconds: {
-      min: 210,
-      max: 270,
-    },
+    accessSeconds: { min: 210, max: 270 },
     entryMeters: 110,
-    entrySeconds: {
-      min: 90,
-      max: 120,
-    },
+    entrySeconds: { min: 90, max: 120 },
     departureOffsetsSeconds: [480, 960, 1560, 2400, 3360, 4200],
-    rideSeconds: {
-      min: 180,
-      max: 210,
-    },
+    rideSeconds: { min: 180, max: 210 },
     rideMeters: 1600,
     finalMeters: 140,
-    finalSeconds: {
-      min: 110,
-      max: 150,
-    },
-    walkingSeconds: {
-      min: 1140,
-      max: 1440,
-    },
+    finalSeconds: { min: 110, max: 150 },
+    walkingSeconds: { min: 1140, max: 1440 },
     walkingMeters: 1500,
   },
   {
@@ -164,30 +149,15 @@ export const DEMO_TEMPLATES: DemoTemplate[] = [
     destinationId: 'yonsei',
     mode: 'bus',
     accessMeters: 420,
-    accessSeconds: {
-      min: 420,
-      max: 480,
-    },
+    accessSeconds: { min: 420, max: 480 },
     entryMeters: 0,
-    entrySeconds: {
-      min: 0,
-      max: 0,
-    },
+    entrySeconds: { min: 0, max: 0 },
     departureOffsetsSeconds: [330, 990, 1710, 2400, 3300, 4260],
-    rideSeconds: {
-      min: 840,
-      max: 900,
-    },
+    rideSeconds: { min: 840, max: 900 },
     rideMeters: 2300,
     finalMeters: 180,
-    finalSeconds: {
-      min: 150,
-      max: 210,
-    },
-    walkingSeconds: {
-      min: 1800,
-      max: 2220,
-    },
+    finalSeconds: { min: 150, max: 210 },
+    walkingSeconds: { min: 1800, max: 2220 },
     walkingMeters: 2350,
   },
   {
@@ -196,59 +166,26 @@ export const DEMO_TEMPLATES: DemoTemplate[] = [
     destinationId: 'konkuk',
     mode: 'subway',
     accessMeters: 1050,
-    accessSeconds: {
-      min: 780,
-      max: 960,
-    },
+    accessSeconds: { min: 780, max: 960 },
     entryMeters: 150,
-    entrySeconds: {
-      min: 120,
-      max: 180,
-    },
+    entrySeconds: { min: 120, max: 180 },
     departureOffsetsSeconds: [960, 1380, 2040, 2880, 3660, 4500],
-    rideSeconds: {
-      min: 240,
-      max: 300,
-    },
+    rideSeconds: { min: 240, max: 300 },
     rideMeters: 1450,
     finalMeters: 220,
-    finalSeconds: {
-      min: 180,
-      max: 240,
-    },
-    walkingSeconds: {
-      min: 2100,
-      max: 2580,
-    },
+    finalSeconds: { min: 180, max: 240 },
+    walkingSeconds: { min: 2100, max: 2580 },
     walkingMeters: 2700,
     bicycle: {
       approachMeters: 120,
-      approachSeconds: {
-        min: 90,
-        max: 120,
-      },
-      hireSeconds: {
-        min: 90,
-        max: 150,
-      },
+      approachSeconds: { min: 90, max: 120 },
+      hireSeconds: { min: 30, max: 30 },
       meters: 1100,
-      rideSeconds: {
-        min: 240,
-        max: 330,
-      },
-      returnSeconds: {
-        min: 60,
-        max: 90,
-      },
-      entrySeconds: {
-        min: 90,
-        max: 150,
-      },
+      rideSeconds: { min: 240, max: 330 },
+      returnSeconds: { min: 30, max: 30 },
+      entrySeconds: { min: 90, max: 150 },
       stockAtAnchor: 3,
-      fallbackWalkingSeconds: {
-        min: 840,
-        max: 1020,
-      },
+      fallbackWalkingSeconds: { min: 840, max: 1020 },
     },
   },
 ];

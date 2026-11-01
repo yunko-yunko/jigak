@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const RENTAL_MODES = ['bicycle', 'scooter'] as const;
+export const RENTAL_MODES = ['bicycle', 'ebike', 'scooter'] as const;
 
 export type RentalMode = (typeof RENTAL_MODES)[number];
 
@@ -33,7 +33,7 @@ export const rentalAvailabilityEntrySchema = z.discriminatedUnion('status', [
   z
     .object({
       status: z.literal('not-found'),
-      reason: z.enum(['no-route', 'search-limited']),
+      reason: z.enum(['no-route', 'search-limited', 'license-unconfirmed', 'no-legal-return']),
     })
     .strict(),
 ]);
@@ -41,6 +41,8 @@ export const rentalAvailabilityEntrySchema = z.discriminatedUnion('status', [
 export const rentalAvailabilitySchema = z
   .object({
     bicycle: rentalAvailabilityEntrySchema,
+    /** Optional so a response from a backend older than the e-bike tab still validates. */
+    ebike: rentalAvailabilityEntrySchema.optional(),
     scooter: rentalAvailabilityEntrySchema,
   })
   .strict();
@@ -49,12 +51,18 @@ export type RentalAvailabilityEntry = z.infer<typeof rentalAvailabilityEntrySche
 
 export type RentalAvailability = z.infer<typeof rentalAvailabilitySchema>;
 
+const RENTAL_NAMES: Record<RentalMode, string> = {
+  bicycle: '따릉이',
+  ebike: '전기자전거',
+  scooter: '킥보드',
+};
+
 /** Plain user-facing explanations share the same meaning on web, native and API clients. */
 export function rentalAvailabilityText(
   mode: RentalMode,
   entry: RentalAvailabilityEntry,
 ): string | null {
-  const name = mode === 'bicycle' ? '따릉이' : '킥보드';
+  const name = RENTAL_NAMES[mode];
 
   switch (entry.reason) {
     case null:
@@ -68,11 +76,11 @@ export function rentalAvailabilityText(
     case 'unconfigured-feed':
       return `${name} 위치·재고 연동 준비 중`;
     case 'unconfigured-router':
-      return mode === 'scooter'
-        ? '킥보드 경로·대여/반납 연동 준비 중'
-        : '따릉이 전용 경로 연동 준비 중';
+      return mode === 'bicycle'
+        ? '따릉이 전용 경로 연동 준비 중'
+        : `${name} 경로·대여/반납 연동 준비 중`;
     case 'unconfigured-rental-policy':
-      return '킥보드 대여·반납 연동 준비 중';
+      return `${name} 대여·반납 연동 준비 중`;
     case 'provider-failure':
       return `${name} 경로 공급원 조회 실패`;
     case 'supply-unavailable':
@@ -81,5 +89,9 @@ export function rentalAvailabilityText(
       return `${name} 조합 탐색 일부 미완료`;
     case 'no-route':
       return `이번 조회에서 이용 가능한 ${name} 조합 없음`;
+    case 'license-unconfirmed':
+      return `${name} 면허 확인 필요`;
+    case 'no-legal-return':
+      return `도착지 근처 ${name} 반납 가능 구역 없음`;
   }
 }

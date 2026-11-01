@@ -1,5 +1,6 @@
 import { SeoulTimetableService } from '../../../common/engine/realtime/subwayTimetable.js';
 import type { RoutingObjective } from '../../../common/shared/domain/estimatedTiming.js';
+import { TAB_MODES, type TabMode } from '../../../common/shared/domain/routing.js';
 import { randomUUID } from 'node:crypto';
 import {
   planBaseRoutes,
@@ -18,27 +19,43 @@ import {
 } from '../../../common/engine/kakao.js';
 import {
   CallBudget,
+  FULL_ROUTE_CALLS,
   MAX_ROUTE_CALLS,
   MAX_COMPOSITE_ROUTE_CALLS,
 } from '../../../common/engine/call-budget.js';
-import { footVariants } from '../../../common/engine/multimodal.js';
+import {
+  footVariants,
+  prefetchBicycleConnections,
+  resolveBicycleStationPairs,
+} from '../../../common/engine/multimodal.js';
 import {
   buildMixedModeBridges,
+  rentalLimitDiagnostics,
   type BridgeGenerationDiagnostics,
 } from '../../../common/engine/mixed-mode-bridges.js';
-import { discoverIntermediateTransit } from '../../../common/engine/intermediate-transit.js';
+import {
+  discoverIntermediateTransit,
+  intermediateStationQueries,
+} from '../../../common/engine/intermediate-transit.js';
 import {
   DEFAULT_MAX_JOURNEY_SECONDS,
   planJourneyGraph,
 } from '../../../common/engine/journey-graph.js';
-import type { ScooterConnectionContext } from '../../../common/engine/scooter-bridge.js';
+import { shortHopWalks } from '../../../common/engine/short-hop-walks.js';
+import {
+  DOCKLESS_PROFILES,
+  type ScooterConnectionContext,
+} from '../../../common/engine/scooter-bridge.js';
 import { metersBetween } from '../../../common/engine/realtime/names.js';
-import { RealtimeService } from '../../../common/engine/realtime/service.js';
+import { rideKey } from '../../../common/engine/ride-identity.js';
+import { labelBusQuotaWaits, RealtimeService } from '../../../common/engine/realtime/service.js';
 import { NearbyTransitService } from '../../../common/engine/realtime/nearby-transit.js';
 import { RoadTrafficService } from '../../../common/engine/realtime/seoulTraffic.js';
 import { routeTraffic } from '../../../common/engine/realtime/routeTraffic.js';
 import { enrichRouteConditions } from '../../../common/engine/realtime/route-conditions.js';
+import { prepareSignalWaits } from '../../../common/engine/realtime/trafficSignals.js';
 import { MobilityFeeds } from '../../../common/engine/realtime/mobility.js';
+import { simulatedNouns } from '../../../common/engine/simulation/shared-scooter-sim.js';
 import { WeatherFeed } from '../../../common/engine/realtime/weather.js';
 import { SeoulParkingFeed, type ParkingLookup } from '../../../common/engine/realtime/parking.js';
 import { rankRouteIntelligence } from '../../../common/engine/intelligence/arrival.js';
@@ -55,6 +72,7 @@ import {
   applyPublicBusTiming,
   type PublicBusRuntime,
 } from '../../../common/engine/intelligence/public-bus-timing.js';
+import { applyRailGateEnvelope } from '../../../common/engine/intelligence/rail-gate-service.js';
 import { journeyPathIdentity } from '../../../common/engine/intelligence/journey-features.js';
 import { journeyReferenceFeaturesForRoute } from '../../../common/engine/intelligence/journey-reference.js';
 import { rentalAvailabilityForSearch } from '../../../common/engine/intelligence/rental-availability.js';
@@ -64,6 +82,10 @@ import {
   journeyRiskSeconds,
 } from '../../../common/shared/intelligence/journeyRisk.js';
 import type { JourneyLearningFeatures } from '../../../common/shared/intelligence/journeyLearning.js';
+import type {
+  RentalAvailability,
+  RentalAvailabilityEntry,
+} from '../../../common/shared/intelligence/rentalAvailability.js';
 import {
   applyContextualEtaTiming,
   learningFeaturesForRoute,
@@ -82,6 +104,63 @@ import type { LearningService as EtaLearningService } from '../../learning/servi
 import type { RoutingOptions } from './routing-options.js';
 import { parseRoute } from '../dto/routing.dto.js';
 
+/** Distinct first/last walks routed for the provider's transit candidates (about 8 boardings and 9 alightings)
+ * in a full search; smaller operator budgets keep their calls for rental and taxi combinations. */
+const MAX_ACCESS_CALLS = 20;
+/** Walks answered by a self-hosted network cost no budget (a lookup takes milliseconds), so every candidate's first and last
+ * walk can be routed; this bound only limits how many one search sends. */
+const MAX_UNMETERED_ACCESS_CALLS = 48;
+const MAX_UNMETERED_CONNECTION_ACCESS_CALLS = 12;
+const OPTIONAL_STAGE_MILLISECONDS = 2_500;
+/** Kakao walks asked to check a detoured self-hosted walk, fastest candidates first. Kakao's walking quota is small
+ * and a search that spent it would rank differently from the next one (가정값, quality lens R6: 6 a search before). */
+const MAX_WALK_SECOND_OPINIONS = 2;
+/** Distinct bus stops one search observes live, fastest candidates' first boardings first. Each costs a stop list
+ * and a sheet call of a 1,000-a-day quota per operation; four keep about 250 searches a day per key (가정값). */
+const MAX_LIVE_BUS_STOPS = 4;
+
+/** A scooter and an e-bike can park on one spot, so a walk fetched for one may lead to the other's
+ * hire. The walk is then named after the vehicle actually hired there. */
+export function nameWalksAfterHires(route: BaseRoute): BaseRoute {
+  const segments = route.segments.map((segment, index) => {
+    const hire = route.segments[index + 1];
+    return segment.mode === 'walk' &&
+      hire?.mode === 'hire' &&
+      segment.end.name !== hire.start.name &&
+      metersBetween(segment.end, hire.start) < 1
+      ? { ...segment, end: { ...hire.start }, title: `${hire.start.name}까지 걷기` }
+      : segment;
+  });
+  return segments.every((segment, index) => segment === route.segments[index])
+    ? route
+    : { ...route, segments };
+}
+
+/** Whether a request names a preference the e-bike tab added. The app sends `hasScooterLicense` once the
+ * server's health lists it; an app older than the tab (HEAD 54a64cb) names neither. */
+export function namesEbikePreferences(body: unknown): boolean {
+  const preferences = (body as { preferences?: unknown } | null)?.preferences;
+  return (
+    typeof preferences === 'object' &&
+    preferences !== null &&
+    ('allowEbike' in preferences || 'hasScooterLicense' in preferences)
+  );
+}
+
+/** What an app older than the e-bike tab can read: its strict schema has no `ebike` entry and no
+ * 'no-legal-return' reason, which then reads as the older 'no-route'. */
+export function legacyRentalAvailability(availability: RentalAvailability): RentalAvailability {
+  const legacy = (entry: RentalAvailabilityEntry): RentalAvailabilityEntry =>
+    entry.status === 'not-found' && entry.reason === 'no-legal-return'
+      ? { status: 'not-found', reason: 'no-route' }
+      : entry;
+
+  return {
+    bicycle: legacy(availability.bicycle),
+    scooter: legacy(availability.scooter),
+  };
+}
+
 export async function executeRouteSearch(
   body: unknown,
   options: RoutingOptions,
@@ -90,7 +169,11 @@ export async function executeRouteSearch(
 ) {
   const clock = options.now ?? Date.now;
   const baseProvider = options.provider!;
-  const provider = withPedestrianRouting(baseProvider, options.pedestrian);
+  const provider = withPedestrianRouting(baseProvider, options.pedestrian, {
+    cycling: options.cycling,
+    scooter: options.scooterRouting,
+    ebike: options.ebikeRouting,
+  });
   const { realtime, nearbyTransit, traffic, mobility, weather, parking } =
     options as Required<RoutingOptions>;
   const intermediateHubs =
@@ -105,7 +188,18 @@ export async function executeRouteSearch(
 
   try {
     const acceptedAt = clock();
-    const input = parseRoute(body, acceptedAt);
+    const parsed = parseRoute(body, acceptedAt);
+    const legacyRentals = !namesEbikePreferences(body);
+    // An app from before the e-bike tab names neither preference and rejects a mode or reason it does not know.
+    const input = legacyRentals
+      ? {
+          ...parsed,
+          preferences: {
+            ...parsed.preferences,
+            allowEbike: false,
+          },
+        }
+      : parsed;
     const objective = options.routingObjective ?? 'estimated-arrival';
     const walkingAlternatives: BaseRoute[] = [];
 
@@ -138,7 +232,20 @@ export async function executeRouteSearch(
       }
     };
 
-    const searchProvider = withRouteQueryReuse(profileRouteProvider(provider, profiler));
+    // Rental and taxi combinations come after every transit walk is checked; their walks use Kakao alone.
+    let secondOpinion = true;
+    const searchProvider = withRouteQueryReuse(
+      profileRouteProvider(
+        withPedestrianRouting(baseProvider, options.pedestrian, {
+          secondOpinion: () => secondOpinion,
+          secondOpinionLookups: MAX_WALK_SECOND_OPINIONS,
+          cycling: options.cycling,
+          scooter: options.scooterRouting,
+          ebike: options.ebikeRouting,
+        }),
+        profiler,
+      ),
+    );
     if (!searchProvider.configured) {
       throw new ApiError(
         'LIVE_NOT_CONFIGURED',
@@ -156,10 +263,14 @@ export async function executeRouteSearch(
         input.preferences.maxBicycleMeters > 0 &&
         mobility.bikes.configured &&
         typeof searchProvider.bicycle === 'function') ||
-        (input.preferences.allowScooter !== false &&
+        (DOCKLESS_PROFILES.scooter.allowed(input.preferences) &&
           mobility.capabilities.sharedScooter &&
           typeof searchProvider.scooter === 'function' &&
-          !!options.scooterPolicy));
+          !!options.scooterPolicy) ||
+        (input.preferences.allowEbike !== false &&
+          mobility.capabilities.sharedEbike &&
+          typeof searchProvider.ebike === 'function' &&
+          !!options.ebikePolicy));
 
     // Complete a rental and its newly fetched transit access without displacing
     // the ordinary road comparison. All attempts and fallbacks share this cap.
@@ -178,6 +289,31 @@ export async function executeRouteSearch(
 
     if (!input.preferences.walkingOnly && baseProvider.configured) {
       calls.push(searchProvider.transit(input, budget));
+    }
+
+    // Walks and rides share the public OpenStreetMap server's one request a second, and rental
+    // checks get only a short window later. Ask for the whole-trip 따릉이 ride and its dock walks now.
+    if (
+      canCompareRental &&
+      input.preferences.allowBicycle &&
+      input.preferences.bicycleReady &&
+      metersBetween(input.origin, input.destination) <= input.preferences.maxBicycleMeters
+    ) {
+      void resolveBicycleStationPairs(
+        { mobility, now: acceptedAt },
+        input.origin,
+        input.destination,
+        2,
+      ).then(
+        (pairs) =>
+          prefetchBicycleConnections(
+            { provider: searchProvider, budget },
+            input.origin,
+            input.destination,
+            pairs,
+          ),
+        () => undefined,
+      );
     }
 
     const outcomes = await profiler.measure('initial-routes', () => Promise.allSettled(calls));
@@ -207,17 +343,23 @@ export async function executeRouteSearch(
       }
     });
 
-    if (!bases.length) {
-      const rejected = outcomes.filter((outcome) => outcome.status === 'rejected');
-      const errors = rejected.map((outcome) => safeApiError(outcome.reason));
+    // Walking and transit can both fail (the walking network down while Kakao's walk quota is spent). The
+    // door-to-door taxi and whole-trip rentals need neither, so the search goes on; this error is reported
+    // only when nothing at all is found.
+    const initialFailure = bases.length
+      ? null
+      : (() => {
+          const errors = outcomes.flatMap((outcome) =>
+            outcome.status === 'rejected' ? [safeApiError(outcome.reason)] : [],
+          );
 
-      // An account or network problem is more actionable than a concurrent empty route.
-      throw (
-        errors.find((error) => error.code !== 'NO_ROUTES') ??
-        errors[0] ??
-        new ApiError('NO_ROUTES', '이 지점 사이의 경로를 찾지 못했어요.', 404)
-      );
-    }
+          // An account or network problem is more actionable than a concurrent empty route.
+          return (
+            errors.find((error) => error.code !== 'NO_ROUTES') ??
+            errors[0] ??
+            new ApiError('NO_ROUTES', '이 지점 사이의 경로를 찾지 못했어요.', 404)
+          );
+        })();
 
     // Query real transfer anchors first, reserving calls for bridges between modes.
     const walkingBases = bases.filter(
@@ -230,6 +372,7 @@ export async function executeRouteSearch(
       typeof searchProvider.driving === 'function' ||
       typeof searchProvider.bicycle === 'function' ||
       typeof searchProvider.scooter === 'function' ||
+      typeof searchProvider.ebike === 'function' ||
       (intermediateHubs > 0 && typeof searchProvider.nearby === 'function');
 
     // Keep one promising rental anchor first. When source itineraries include
@@ -240,8 +383,21 @@ export async function executeRouteSearch(
       canCompareRental &&
       transitSources.some((route) => route.segments.some((segment) => segment.mode === 'bus')) &&
       transitSources.some((route) => route.segments.some((segment) => segment.mode === 'subway'));
+    const hasDirectBusBaseline = transitSources.some((route) => {
+      const vehicles = route.segments.filter(
+        (segment) => segment.mode === 'bus' || segment.mode === 'subway',
+      );
+
+      return vehicles.length === 1 && vehicles[0].mode === 'bus';
+    });
     const accessCache: NonNullable<Parameters<typeof enrichTransitRoutes>[2]['accessCache']> =
       new Map();
+    const headwayBook: NonNullable<Parameters<typeof enrichTransitRoutes>[2]['headwayBook']> =
+      new Map();
+    const busStopAllowance = {
+      observed: new Set<string>(),
+      max: MAX_LIVE_BUS_STOPS,
+    };
     let accessLimited = false;
 
     const onAccessLimited = () => {
@@ -284,16 +440,31 @@ export async function executeRouteSearch(
         input.preferences.allowBicycle && input.preferences.bicycleReady
           ? input.preferences.maxBicycleMeters
           : 0,
-        input.preferences.allowScooter !== false && options.scooterPolicy ? 6000 : 0,
+        DOCKLESS_PROFILES.scooter.allowed(input.preferences) && options.scooterPolicy
+          ? DOCKLESS_PROFILES.scooter.rideMeters
+          : 0,
+        input.preferences.allowEbike !== false && options.ebikePolicy
+          ? DOCKLESS_PROFILES.ebike.rideMeters
+          : 0,
       );
 
       // Only a fetch-order bound: no hypothetical bicycle speed enters the actual ETA.
       const potentialSaving = gaps
         .filter((gap) => (gap.meters >= 600 || gap.seconds >= 600) && gap.meters <= reach)
-        .reduce((sum, gap) => sum + Math.max(0, gap.seconds - gap.meters / 3.6 - 150), 0);
+        .reduce((sum, gap) => sum + Math.max(0, gap.seconds - gap.meters / 3.6), 0);
 
       return timing.total - potentialSaving;
     };
+
+    // The first intermediate station searches depend only on the source itineraries; ask them while access walks are routed.
+    if (!input.preferences.walkingOnly && intermediateHubs > 0 && searchProvider.nearby) {
+      for (const query of intermediateStationQueries(transitSources, {
+        maxHubs: intermediateHubs,
+        now: acceptedAt,
+        acquisitionObjective: objective,
+      }))
+        void searchProvider.nearby(query).catch(() => undefined);
+    }
 
     let enrichedTransit = transitBases.length
       ? await profiler.measure('access', () =>
@@ -302,6 +473,8 @@ export async function executeRouteSearch(
             budget,
             realtime,
             accessCache,
+            headwayBook,
+            busStopAllowance,
             onAccessLimited,
             onWalkingAlternatives,
             acquisitionObjective: objective,
@@ -312,15 +485,22 @@ export async function executeRouteSearch(
                 }
               : {}),
             now: clock(),
+            maxUnmeteredAccessCalls: MAX_UNMETERED_ACCESS_CALLS,
             ...(multimodal
               ? {
-                  maxAccessCalls: canCompareRental
-                    ? accessModeCoverage
-                      ? 4
-                      : 2
-                    : options.pedestrian?.configured
-                      ? 4
-                      : 2,
+                  baselineDirectBusCoverage: true,
+                  maxAccessCalls:
+                    budget.limit >= FULL_ROUTE_CALLS
+                      ? MAX_ACCESS_CALLS
+                      : canCompareRental
+                        ? accessModeCoverage
+                          ? 6
+                          : hasDirectBusBaseline
+                            ? 4
+                            : 2
+                        : options.pedestrian?.configured
+                          ? 4
+                          : 2,
                 }
               : {}),
           }),
@@ -337,13 +517,19 @@ export async function executeRouteSearch(
         budget,
         realtime,
         accessCache,
+        headwayBook,
+        busStopAllowance,
         onAccessLimited,
         onWalkingAlternatives,
         acquisitionObjective: objective,
         now: clock(),
         maxAccessCalls: 2,
+        maxUnmeteredAccessCalls: MAX_UNMETERED_CONNECTION_ACCESS_CALLS,
       });
     };
+
+    // Every transit candidate and its walks are known now; intermediate stops, rentals and taxis share a short window.
+    budget.closeAfter(OPTIONAL_STAGE_MILLISECONDS);
 
     const intermediate =
       !input.preferences.walkingOnly && intermediateHubs > 0 && searchProvider.nearby
@@ -367,6 +553,12 @@ export async function executeRouteSearch(
     const intermediateRoutes = intermediate?.routes ?? [];
     let bridgeSearch: BridgeGenerationDiagnostics | undefined;
 
+    secondOpinion = false;
+    // Timetables and road speeds are cached; load them for the transit routes while combinations are built.
+    void enrichRouteConditions(enrichedTransit, clock(), traffic, options.timetable).catch(
+      () => undefined,
+    );
+
     const bridges = multimodal
       ? await profiler.measure('bridges', () =>
           buildMixedModeBridges(input, [...enrichedTransit, ...intermediateRoutes], {
@@ -376,6 +568,7 @@ export async function executeRouteSearch(
             mobility,
             parking,
             scooterPolicy: options.scooterPolicy,
+            ebikePolicy: options.ebikePolicy,
             onWalkingAlternatives,
             acquisitionObjective: objective,
             queryCallCost: (mode, endpoints) =>
@@ -392,11 +585,14 @@ export async function executeRouteSearch(
                   budget,
                   realtime,
                   accessCache,
+                  headwayBook,
+                  busStopAllowance,
                   onAccessLimited,
                   onWalkingAlternatives,
                   acquisitionObjective: objective,
                   now: clock(),
                   maxAccessCalls: 2,
+                  maxUnmeteredAccessCalls: MAX_UNMETERED_ACCESS_CALLS,
                 });
               }
             },
@@ -406,6 +602,17 @@ export async function executeRouteSearch(
           }),
         )
       : [];
+
+    // A short bus ride is compared with walking its stretch: put that walk among the fetched paths.
+    if (!input.preferences.walkingOnly) {
+      const hopWalks = await shortHopWalks([...enrichedTransit, ...intermediateRoutes, ...bridges], {
+        provider: searchProvider,
+        budget,
+        now: clock(),
+        acquisitionObjective: objective,
+      });
+      if (hopWalks.length) onWalkingAlternatives(hopWalks);
+    }
 
     // Missing access paths remain visibly estimated. They never create a turn-by-turn path.
     for (const route of enrichedTransit) {
@@ -452,13 +659,21 @@ export async function executeRouteSearch(
       ...walkingAlternatives,
     ];
 
-    const roadAdjusted = await enrichRouteConditions(
+    // Crosswalk phases do not depend on schedules or road speeds: read them while those load, time the waits after.
+    const signalWaits =
+      options.signals?.signals.configured && options.signals.intersections.configured
+        ? prepareSignalWaits(roadInputs, options.signals)
+        : null;
+    const conditioned = await enrichRouteConditions(
       roadInputs,
       clock(),
       traffic,
       options.timetable,
       profiler,
     );
+    const roadAdjusted = signalWaits
+      ? await profiler.measure('signals', () => signalWaits(conditioned, clock()))
+      : conditioned;
     const [weatherResult, mobilityResult] = await contextPromise;
 
     if (weatherResult.status === 'rejected') {
@@ -534,7 +749,7 @@ export async function executeRouteSearch(
               parking.at!(lot, arrivalAt)?.parkingAccess ?? null,
           }
         : {}),
-      ...(learningState?.model.active
+      ...(learningState?.model.active || learningState?.hgb.active
         ? {
             contextualEta: {
               weather: conditions,
@@ -666,42 +881,69 @@ export async function executeRouteSearch(
         )
       : null;
 
-    // Main results stay ordered by total time. Separately retain a feasible rental
-    // comparison when twelve faster choices use other modes, using the same fetched graph.
-    const bicycleGraph =
-      canCompareRental &&
-      input.preferences.allowBicycle &&
-      input.preferences.bicycleReady &&
-      bases.some((route) => route.segments.some((segment) => segment.mode === 'bicycle'))
-        ? planJourneyGraph(planningInput, bases, {
+    // Main results stay ordered by total time. Separately keep each results tab's best feasible
+    // route when twelve faster choices use other modes, searched on the same fetched graph.
+    const tabEnabled: Record<TabMode, boolean> = {
+      subway: true,
+      bus: true,
+      bicycle: canCompareRental && input.preferences.allowBicycle && input.preferences.bicycleReady,
+      ebike: input.preferences.allowEbike !== false && !!provider.ebike && !!options.ebikePolicy,
+      scooter:
+        DOCKLESS_PROFILES.scooter.allowed(input.preferences) &&
+        !!provider.scooter &&
+        !!options.scooterPolicy,
+      taxi: input.preferences.allowTaxi !== false,
+      car: input.preferences.hasCar === true,
+    };
+    const listed = [...graph.routes, ...(footGraph?.routes ?? []), ...(transitGraph?.routes ?? [])];
+    const uses = (route: BaseRoute, mode: TabMode) =>
+      route.segments.some((segment) => segment.mode === mode);
+    // A tab's own minutes are its mode's: a route that rides only that vehicle (walks, gates and waits are free).
+    const pure = (route: BaseRoute, mode: TabMode) =>
+      uses(route, mode) &&
+      route.segments.every(
+        (segment) => segment.mode === mode || !(TAB_MODES as readonly string[]).includes(segment.mode),
+      );
+    // A tab the main results already fill with its own pure route needs no search; otherwise the best pure route over
+    // the same fetched paths is kept, so a tab never shows a taxi's minutes because twelve faster mixtures filled the list.
+    const pureSearches = useGraph
+      ? TAB_MODES.filter(
+          (mode) =>
+            tabEnabled[mode] &&
+            bases.some((route) => uses(route, mode)) &&
+            !listed.some((route) => pure(route, mode)),
+        ).map((mode) => ({
+          mode,
+          search: planJourneyGraph(planningInput, bases, {
             ...graphOptions,
             maxResults: 1,
-            requiredMode: 'bicycle',
-          })
-        : null;
-    const scooterGraph =
-      input.preferences.allowScooter !== false &&
-      !!provider.scooter &&
-      !!options.scooterPolicy &&
-      bases.some((route) => route.segments.some((segment) => segment.mode === 'scooter'))
-        ? planJourneyGraph(planningInput, bases, {
+            pureMode: mode,
+          }),
+        }))
+      : [];
+    const pureCandidates = pureSearches.flatMap(({ mode, search }) =>
+      search.routes.filter((route) => pure(route, mode) && graphOptions.acceptRoute(route)),
+    );
+    // A tab the main results already fill needs no search of its own.
+    const tabSearches = useGraph
+      ? TAB_MODES.filter(
+          (mode) =>
+            tabEnabled[mode] &&
+            bases.some((route) => uses(route, mode)) &&
+            !listed.some((route) => uses(route, mode)) &&
+            !pureCandidates.some((route) => uses(route, mode)),
+        ).map((mode) => ({
+          mode,
+          search: planJourneyGraph(planningInput, bases, {
             ...graphOptions,
             maxResults: 1,
-            requiredMode: 'scooter',
-          })
-        : null;
-    const rentalCandidates = [
-      ...(bicycleGraph?.routes.filter(
-        (route) =>
-          route.segments.some((segment) => segment.mode === 'bicycle') &&
-          graphOptions.acceptRoute(route),
-      ) ?? []),
-      ...(scooterGraph?.routes.filter(
-        (route) =>
-          route.segments.some((segment) => segment.mode === 'scooter') &&
-          graphOptions.acceptRoute(route),
-      ) ?? []),
-    ];
+            requiredMode: mode,
+          }),
+        }))
+      : [];
+    const tabCandidates = tabSearches.flatMap(({ mode, search }) =>
+      search.routes.filter((route) => uses(route, mode) && graphOptions.acceptRoute(route)),
+    );
 
     const graphCandidates = [
       ...new Map(
@@ -709,7 +951,8 @@ export async function executeRouteSearch(
           ...graph.routes,
           ...(footGraph?.routes ?? []),
           ...(transitGraph?.routes ?? []),
-          ...rentalCandidates,
+          ...pureCandidates,
+          ...tabCandidates,
         ].map((route) => [route.id, route]),
       ).values(),
     ];
@@ -735,7 +978,9 @@ export async function executeRouteSearch(
       );
     }
 
-    const candidates = useGraph ? (graphCandidates.length ? graphCandidates : fallback) : bases;
+    const candidates = (
+      useGraph ? (graphCandidates.length ? graphCandidates : fallback) : bases
+    ).map(nameWalksAfterHires);
 
     if (useGraph && !graphCandidates.length) {
       for (const route of candidates) {
@@ -752,20 +997,30 @@ export async function executeRouteSearch(
       }
     }
 
-    const result = planBaseRoutes(planningInput, candidates, provenance, {
+    // Subway runs: T-DATA gate-to-gate upper bound widens only the slower bound.
+    const enveloped = options.railGate
+      ? applyRailGateEnvelope(candidates, planningInput, options.railGate.predictRun)
+      : candidates;
+    const result = planBaseRoutes(planningInput, enveloped, provenance, {
       objective,
       deadlineValidationTime: acceptedAt,
       maxRoutes: useGraph ? 18 : 3,
     });
     if (!result.routes.length) {
-      throw new ApiError(
-        'NO_ROUTES',
-        input.preferences.walkingOnly
-          ? '이 지점 사이에 걷기만으로 이용할 수 있는 경로를 찾지 못했어요.'
-          : '설정한 이동 조건에 맞는 경로를 찾지 못했어요.',
-        404,
+      throw (
+        initialFailure ??
+        new ApiError(
+          'NO_ROUTES',
+          input.preferences.walkingOnly
+            ? '이 지점 사이에 걷기만으로 이용할 수 있는 경로를 찾지 못했어요.'
+            : '설정한 이동 조건에 맞는 경로를 찾지 못했어요.',
+          404,
+        )
       );
     }
+    // While the day's live bus calls are spent, every bus wait left on the headway rule says why.
+    if (realtime?.quotaUntil?.('seoul-bus') != null)
+      result.routes = labelBusQuotaWaits(result.routes);
 
     const wholeFeatures = new Map<string, JourneyLearningFeatures>();
 
@@ -830,8 +1085,30 @@ export async function executeRouteSearch(
 
     result.routes.sort((a, b) => (rank.get(a.id) ?? 999) - (rank.get(b.id) ?? 999));
 
+    // The same vehicles with a slower walk variant is not another route; keep the fastest one.
+    const rides = new Set<string>();
+
+    result.routes = result.routes.filter((route) => {
+      const ride = rideKey(route.segments);
+      if (rides.has(ride)) {
+        return false;
+      }
+
+      rides.add(ride);
+
+      return true;
+    });
+    intelligence.assessments = intelligence.assessments.filter((assessment) =>
+      result.routes.some((route) => route.id === assessment.routeId),
+    );
+
     if (options.learning) {
       for (const route of result.routes) {
+        // A simulated scooter's or e-bike's rental and ride happen on no real vehicle; they never train ETAs.
+        if (route.segments.some((segment) => segment.provenance.simulated)) {
+          continue;
+        }
+
         const whole = wholeFeatures.get(route.id);
 
         route.learningTicket = options.learning.store.issueTicket(
@@ -860,8 +1137,12 @@ export async function executeRouteSearch(
       failures.length > 0;
     const searchLimited =
       acquisitionIncomplete ||
-      [graph, footGraph, transitGraph, bicycleGraph, scooterGraph].some(
+      [graph, footGraph, transitGraph, ...tabSearches.map(({ search }) => search)].some(
         (search) => search?.diagnostics.limitReached,
+      ) ||
+      // A pure tab search keeps one route by design, so the comparison-results cap it always meets says nothing.
+      pureSearches.some(({ search }) =>
+        search.diagnostics.limitsReached.some((limit) => limit !== 'comparison-results'),
       );
     const eligibleObjectives = intelligence.assessments
       .filter((assessment) => assessment.eligible)
@@ -889,21 +1170,51 @@ export async function executeRouteSearch(
       return;
     }
 
+    // While the simulator still computes today's window its kinds are missing, not absent: say so
+    // with the existing 'supply-unavailable' reason (older apps accept it) unless a real feed has them.
+    const simulation = options.scooterSimulation;
+    const realFeed = (kind: 'kick-scooter' | 'e-bicycle') =>
+      mobility.gbfs.some(
+        (feed) =>
+          !feed.simulated && (feed.kinds ? feed.kinds.includes(kind) : kind === 'kick-scooter'),
+      );
+    const pendingKinds: ('scooter' | 'ebike')[] =
+      simulation && !simulation.isReady(clock())
+        ? [
+            ...(simulation.fleets.scooter > 0 &&
+            !mobility.scooters.configured &&
+            !realFeed('kick-scooter')
+              ? (['scooter'] as const)
+              : []),
+            ...(simulation.fleets.ebike > 0 && !legacyRentals && !realFeed('e-bicycle')
+              ? (['ebike'] as const)
+              : []),
+          ]
+        : [];
+
+    const rentalAvailability = rentalAvailabilityForSearch({
+      preferences: input.preferences,
+      routes: result.routes,
+      capabilities: {
+        bicycleFeed: mobility.capabilities.sharedBicycle,
+        scooterFeed: mobility.capabilities.sharedScooter,
+        ebikeFeed: mobility.capabilities.sharedEbike,
+        bicycleRouter: !!provider.bicycle,
+        scooterRouter: !!provider.scooter,
+        ebikeRouter: !!provider.ebike,
+        scooterRentalPolicy: !!options.scooterPolicy,
+        ebikeRentalPolicy: !!options.ebikePolicy,
+      },
+      diagnostics: bridgeSearch && rentalLimitDiagnostics(bridgeSearch),
+      unavailableSupply: pendingKinds,
+    });
+
     const payload = {
       ...result,
       intelligence,
-      rentalAvailability: rentalAvailabilityForSearch({
-        preferences: input.preferences,
-        routes: result.routes,
-        capabilities: {
-          bicycleFeed: mobility.capabilities.sharedBicycle,
-          scooterFeed: mobility.capabilities.sharedScooter,
-          bicycleRouter: !!provider.bicycle,
-          scooterRouter: !!provider.scooter,
-          scooterRentalPolicy: !!options.scooterPolicy,
-        },
-        diagnostics: bridgeSearch,
-      }),
+      rentalAvailability: legacyRentals
+        ? legacyRentalAvailability(rentalAvailability)
+        : rentalAvailability,
       search: {
         ...graph.diagnostics,
         accessLimited,
@@ -934,7 +1245,6 @@ export async function executeRouteSearch(
       },
       notice: [
         result.notice,
-        searchLimited ? '탐색 한도에 도달했어요. 확인한 후보 안에서 빠른 조합을 추천합니다.' : '',
         bridgeSearch?.providerFailures
           ? '일부 이동수단의 연결 경로를 공급원에서 확인하지 못했어요. 해당 조합은 추천에 포함하지 않았어요.'
           : '',
@@ -944,6 +1254,9 @@ export async function executeRouteSearch(
           : '',
         failures.length
           ? `일부 경로 조회가 실패했어요: ${failures.map((failure) => failure.message).join(' ')}`
+          : '',
+        pendingKinds.length && simulation
+          ? `시연용 가상 ${simulatedNouns(simulation.fleets)} 위치를 계산하는 중이라 이번 결과에는 넣지 않았어요. 잠시 뒤 다시 찾아 주세요.`
           : '',
       ]
         .filter(Boolean)

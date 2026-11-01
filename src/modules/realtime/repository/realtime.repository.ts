@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { z } from 'zod';
 import { RuntimeRepository } from '../../../common/providers/runtime.repository.js';
 import { routeTraffic } from '../../../common/engine/realtime/routeTraffic.js';
+import type { MobilitySnapshotQuery } from '../../../common/engine/realtime/mobility.js';
 import { arrivalsSchema, routeLegsSchema } from '../dto/realtime.dto.js';
 import { arrivalSnapshot } from '../domain/arrival-snapshot.js';
 
@@ -14,8 +15,16 @@ type Point = {
 export class RealtimeRepository {
   constructor(@Inject(RuntimeRepository) private readonly runtime: RuntimeRepository) {}
 
-  mobility(point: Point, radius: number) {
-    return this.runtime.options.mobility.snapshot(point, radius);
+  mobility(point: Point, radius: number, query: MobilitySnapshotQuery = {}) {
+    return this.runtime.options.mobility.snapshot(point, radius, query);
+  }
+
+  get subwayLinesConfigured() {
+    return !!this.runtime.options.subwayLines?.configured;
+  }
+
+  subwayLine(line: string, station?: string) {
+    return this.runtime.options.subwayLines!.view(line, station);
   }
 
   nearby(point: Point) {
@@ -30,7 +39,8 @@ export class RealtimeRepository {
     const r = this.runtime.options.realtime;
 
     return arrivalSnapshot(
-      await Promise.all(input.boardings.map((b) => r.lookup(b))),
+      // The app polls these while the rider heads for a stop; they may spend the day's last bus calls.
+      await Promise.all(input.boardings.map((b) => r.lookup(b, 'guidance'))),
       r.capabilities,
       r.diagnostics,
       Date.now(),

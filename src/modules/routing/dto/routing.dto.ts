@@ -27,6 +27,8 @@ export const preferencesSchema = z
     bicycleReady: z.boolean(),
     allowTaxi: z.boolean().optional(),
     allowScooter: z.boolean().optional(),
+    allowEbike: z.boolean().optional(),
+    hasScooterLicense: z.boolean().optional(),
     hasCar: z.boolean().optional(),
     carLocation: placeSchema.optional(),
   })

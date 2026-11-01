@@ -7,17 +7,26 @@ import type {
 } from '../../shared/domain/nearbyTransit.js';
 import { NEARBY_TRANSIT_FRESH_MS } from '../../shared/domain/nearbyTransit.js';
 import type { NearbyPlace, RouteProvider } from '../kakao.js';
-import { SeoulBusFeed, TagoBusFeed, type BusFeed, type BusStopCandidate } from './bus.js';
 import { FeedError, type FeedOptions } from './http.js';
+import { ServiceKeyPool } from './key-pool.js';
 import { metersBetween, stationBaseName, subwayLineName } from './names.js';
 import { SeoulSubwayFeed } from './seoulSubway.js';
+import { RealtimeService } from './service.js';
 
 interface NearbyTransitOptions extends FeedOptions {
   dataGoKrServiceKey?: string;
+  dataGoKrServiceKeyFallback?: string;
   seoulOpenApiKey?: string;
+  seoulOpenApiKeyFallback?: string;
   provider?: Pick<RouteProvider, 'configured' | 'nearby'>;
   now?: () => number;
+  /** Bus stops and arrivals come through this service's caches and key pool, shared with route search and
+   * guidance. Without it the snapshot keeps a private one built from the keys above. */
+  realtime?: RealtimeService;
 }
+
+const BUS_QUOTA_MESSAGE =
+  '오늘 실시간 버스 도착 조회 한도를 다 썼어요. 자정이 지나면 다시 보여 드려요.';
 
 const BUS_RADIUS = 200,
   SUBWAY_RADIUS = 1200;
@@ -162,31 +171,32 @@ const freshSource = (observedAt: number, now: number) =>
 
 /** Position and arrival feeds are kept separate: a discovered station is never proof of live arrivals. */
 export class NearbyTransitService {
-  private readonly seoulBus: SeoulBusFeed;
-  private readonly tagoBus: TagoBusFeed;
+  private readonly realtime: RealtimeService;
   private readonly subway: SeoulSubwayFeed;
   private readonly now: () => number;
-  private readonly busPositions: Cache<BusStopCandidate[]>;
   private readonly stationPositions: Cache<NearbyPlace[]>;
-  private readonly busArrivals: Cache<{
-    rows: Awaited<ReturnType<BusFeed['arrivals']>>;
-    observedAt: number;
-  }>;
   private readonly subwayArrivals: Cache<{
     rows: Awaited<ReturnType<SeoulSubwayFeed['stationRows']>>;
     observedAt: number;
   }>;
-  private readonly busBlockedUntil = new Map<BusFeed['provider'], number>();
   private subwayBlockedUntil = 0;
 
   constructor(private readonly options: NearbyTransitOptions = {}) {
     this.now = options.now ?? Date.now;
-    this.seoulBus = new SeoulBusFeed(options.dataGoKrServiceKey, options);
-    this.tagoBus = new TagoBusFeed(options.dataGoKrServiceKey, options);
-    this.subway = new SeoulSubwayFeed(options.seoulOpenApiKey?.trim() ?? '', options);
-    this.busPositions = new Cache(this.now, 5 * 60_000);
+    this.realtime =
+      options.realtime ??
+      new RealtimeService({
+        dataGoKrServiceKey: options.dataGoKrServiceKey,
+        dataGoKrServiceKeyFallback: options.dataGoKrServiceKeyFallback,
+        fetcher: options.fetcher,
+        timeoutMs: options.timeoutMs,
+        now: this.now,
+      });
+    this.subway = new SeoulSubwayFeed(
+      new ServiceKeyPool([options.seoulOpenApiKey, options.seoulOpenApiKeyFallback]),
+      options,
+    );
     this.stationPositions = new Cache(this.now, 5 * 60_000);
-    this.busArrivals = new Cache(this.now, 15_000);
     this.subwayArrivals = new Cache(this.now, 15_000);
   }
 
@@ -210,7 +220,7 @@ export class NearbyTransitService {
   }
 
   private async nearbyBus(point: NearbyTransitPoint): Promise<NearbyTransitGroup> {
-    const feed: BusFeed = inSeoul(point) ? this.seoulBus : this.tagoBus;
+    const feed = this.realtime.busFeedAt(point);
     const group = emptyGroup(
       feed.provider,
       BUS_RADIUS,
@@ -226,19 +236,22 @@ export class NearbyTransitService {
       };
     }
 
-    if (this.now() < (this.busBlockedUntil.get(feed.provider) ?? 0)) {
+    // Browsing nearby stops gives up first when the day's bus calls run low; route guidance keeps the rest.
+    const blocked = this.realtime.busBlocked(feed.provider, 'browse');
+    if (blocked) {
       return {
         ...group,
         status: 'error',
-        message: '버스 정보 공급원의 인증을 확인해야 해요. 잠시 후 다시 시도해 주세요.',
+        message:
+          blocked.reason === 'quota'
+            ? BUS_QUOTA_MESSAGE
+            : '버스 정보 공급원의 인증을 확인해야 해요. 잠시 후 다시 시도해 주세요.',
       };
     }
 
+    let quota = false;
     try {
-      const positions = await this.busPositions.get(
-        `${feed.provider}:${point.latitude.toFixed(4)},${point.longitude.toFixed(4)}`,
-        () => feed.nearbyStops(point),
-      );
+      const positions = await this.realtime.busStopsNear(feed, point, 'browse');
 
       const seen = new Set<string>();
 
@@ -267,17 +280,7 @@ export class NearbyTransitService {
           };
 
           try {
-            const cached = await this.busArrivals.get(
-              `${feed.provider}:${stop.cityCode ?? ''}:${stop.id}`,
-              async () => {
-                const observedAt = this.now();
-
-                return {
-                  rows: await feed.arrivals(stop, observedAt),
-                  observedAt,
-                };
-              },
-            );
+            const cached = await this.realtime.busStopRows(feed, stop, 'browse');
 
             const now = this.now();
 
@@ -307,27 +310,31 @@ export class NearbyTransitService {
                 ended: row.ended,
               }));
 
-            return stopResult(place, arrivals, cached.observedAt, now);
+            return stopResult(place, arrivals, cached.queriedAt, now);
           } catch (error) {
-            if (error instanceof FeedError && error.reason === 'auth') {
-              this.busBlockedUntil.set(feed.provider, this.now() + 60_000);
-            }
+            quota ||= error instanceof FeedError && error.reason === 'quota';
 
             return stopResult(place, [], null, this.now(), 'error');
           }
         }),
       );
 
-      return summarize(group, stops);
-    } catch (error) {
-      if (error instanceof FeedError && error.reason === 'auth') {
-        this.busBlockedUntil.set(feed.provider, this.now() + 60_000);
-      }
+      const summary = summarize(group, stops);
 
+      return quota && summary.status === 'error'
+        ? {
+            ...summary,
+            message: BUS_QUOTA_MESSAGE,
+          }
+        : summary;
+    } catch (error) {
       return {
         ...group,
         status: 'error',
-        message: '버스 정류장 자료를 확인하지 못했어요. 연결 상태와 공급원 권한을 확인해 주세요.',
+        message:
+          error instanceof FeedError && error.reason === 'quota'
+            ? BUS_QUOTA_MESSAGE
+            : '버스 정류장 자료를 확인하지 못했어요. 연결 상태와 공급원 권한을 확인해 주세요.',
       };
     }
   }

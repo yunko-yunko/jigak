@@ -33,7 +33,8 @@ export const etaLearningFeaturesSchema = z
 
 /** No coordinates, place names, account identifiers or raw sensor streams. */
 export interface EtaLearningFeatures {
-  mode: SegmentMode;
+  /** E-bike legs have no learned model: the trained mode enums stay as they were, so no feature exists for them. */
+  mode: Exclude<SegmentMode, 'ebike'>;
   predictedSeconds: number;
   distanceMeters: number;
   startedAt: number;

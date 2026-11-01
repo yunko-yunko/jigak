@@ -14,6 +14,7 @@ import {
   type ContextualEtaModel,
 } from '../../../common/engine/intelligence/contextual-model.js';
 import { trainContextualEta } from '../../../common/engine/intelligence/contextual-training.js';
+import { HgbEtaService } from '../../../common/engine/intelligence/hgb-model.js';
 import {
   parseJourneyEtaModel,
   prepareJourneyEtaPredictor,
@@ -25,6 +26,10 @@ import { LearningRepository } from '../repository/learning.repository.js';
 
 @Injectable()
 export class LearningService implements OnModuleInit {
+  /** Offline recorded-trip HGB checkpoint, read-only from ETA_HGB_MODEL_PATH; absent means inactive. */
+  readonly hgb = new HgbEtaService(process.env.ETA_HGB_MODEL_PATH || undefined);
+  /** Set by status(): HGB stays off while a whole-journey collection holds the stable leg baseline. */
+  private hgbAllowed = false;
   private model?: ContextualEtaModel;
   private contextualPredictor: ReturnType<typeof prepareContextualEtaPredictor> = null;
   private journeyModel?: JourneyEtaModel;
@@ -63,6 +68,10 @@ export class LearningService implements OnModuleInit {
     }
 
     this.revision = Number(state.revision);
+    // Another instance may have erased trips this offline checkpoint was trained on.
+    if (state.reasons.includes('data-erased-retraining-required')) {
+      this.invalidateHgb();
+    }
     this.reasons = [...state.reasons];
     this.journeyReasons = [...state.journey_reasons];
     this.shadowLegCandidate = state.shadow_leg_candidate ?? undefined;
@@ -91,7 +100,23 @@ export class LearningService implements OnModuleInit {
   }
 
   predict(features: EtaLearningFeatures) {
-    return this.contextualPredictor?.(features, Date.now()) ?? null;
+    if (!this.hgb.status().active) {
+      return this.contextualPredictor?.(features, Date.now()) ?? null;
+    }
+
+    return (
+      (this.hgbAllowed ? this.hgb.predict(features) : null) ??
+      this.contextualPredictor?.(features, Date.now()) ??
+      null
+    );
+  }
+
+  private invalidateHgb() {
+    try {
+      this.hgb.erase();
+    } catch {
+      /* A read-only checkpoint mount cannot be removed; the in-memory model is already cleared. */
+    }
   }
 
   predictJourney(features: JourneyLearningFeatures) {
@@ -228,12 +253,23 @@ export class LearningService implements OnModuleInit {
     await this.refresh();
 
     const active = !!this.model && usableContextualEtaModel(this.model, Date.now());
+    const cohort = await this.currentCohort(),
+      hgbStatus = this.hgb.status();
+
+    this.hgbAllowed = !cohort.groups || cohort.referenceIndependent;
 
     return {
       collectionAvailable: true,
       ...(await this.store.counts()),
       retentionDays: 90,
       journey: await this.journeyStatus(),
+      hgb: this.hgbAllowed
+        ? hgbStatus
+        : {
+            ...hgbStatus,
+            active: false,
+            reasons: ['whole-journey-cohort-baseline-held'],
+          },
       trainingReadiness: {
         labelSource: 'recorded-trip' as const,
         requiredGroups: {
@@ -442,6 +478,7 @@ export class LearningService implements OnModuleInit {
 
     if (deleted > 0) {
       this.lastSeenJourneyProfile = undefined;
+      this.invalidateHgb();
     }
 
     await this.refresh();

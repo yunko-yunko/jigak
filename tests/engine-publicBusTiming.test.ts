@@ -152,6 +152,7 @@ test('public bus estimates never alter other modes or shorten a provider upper b
       startedAt: NOW,
       precedingWaitSeconds: 0,
       vehicleCount: 0,
+      requestNow: NOW,
     },
     null,
   )!;
@@ -249,6 +250,7 @@ test('a later rider model replaces the public envelope and restores the genuine 
       startedAt: NOW,
       precedingWaitSeconds: 0,
       vehicleCount: 0,
+      requestNow: NOW,
     },
     null,
   )!;

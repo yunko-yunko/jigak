@@ -10,12 +10,17 @@ import type {
 } from '../../shared/domain/types.js';
 import type { JourneyLearningFeatures } from '../../shared/intelligence/journeyLearning.js';
 import type { WeatherSnapshot } from '../../shared/intelligence/types.js';
-import { REALTIME_BOARDING_BUFFER_SECONDS } from '../../shared/domain/routing.js';
+import {
+  REALTIME_BOARDING_BUFFER_SECONDS,
+  selectLiveBoarding,
+} from '../../shared/domain/routing.js';
+import { TIMETABLE_BOARDING_BUFFER_SECONDS } from '../../shared/domain/waitEstimates.js';
 import { boardingObservationIsFresh } from '../../shared/journey/realtimeFreshness.js';
 import { taxiPickupSeconds } from '../multimodal.js';
 import { expectedWaitSeconds } from '../transit-enrichment.js';
 import { journeyFeaturesForRoute } from './journey-features.js';
 import { restorePublicBusSource } from './public-bus-timing.js';
+import { restoreRailGateSource } from './rail-gate-service.js';
 import { timetableIsFresh, timetableMatchesSegment } from '../../shared/domain/subwayTimetable.js';
 
 const DAY = 86_400_000,
@@ -122,7 +127,7 @@ function publishedBoarding(
       row.arrivalAt === selected.latestTrainArrivalAt &&
       row.trainNo === selected.latestTrainNo,
   );
-  const buffer = REALTIME_BOARDING_BUFFER_SECONDS.subway * 1000;
+  const buffer = TIMETABLE_BOARDING_BUFFER_SECONDS * 1000;
 
   if (
     !first ||
@@ -157,13 +162,14 @@ function publishedBoarding(
 }
 
 function restore(segment: Segment, now: number): Segment | null {
-  if (segment.etaPrediction && segment.publicEtaPrediction) {
+  if (segment.etaPrediction && (segment.publicEtaPrediction || segment.railEtaPrediction)) {
     return null;
   }
 
   const source =
     segment.etaPrediction?.sourceDurationSeconds ??
     segment.publicEtaPrediction?.sourceDurationSeconds ??
+    segment.railEtaPrediction?.sourceDurationSeconds ??
     segment.durationSeconds;
 
   if (
@@ -204,8 +210,15 @@ function restore(segment: Segment, now: number): Segment | null {
     return null;
   }
 
+  if (
+    segment.railEtaPrediction &&
+    (segment.mode !== 'subway' || segment.railEtaPrediction.evaluatedAt !== now)
+  ) {
+    return null;
+  }
+
   return {
-    ...restorePublicBusSource(segment),
+    ...restoreRailGateSource(restorePublicBusSource(segment)),
     durationSeconds: {
       ...source,
     },
@@ -354,19 +367,28 @@ export function journeyReferenceFeaturesForRoute(
       }
 
       const earliest = connection.departureAt,
-        latest = connection.status === 'borderline' ? connection.fallbackDepartureAt : earliest;
+        latest =
+          connection.status === 'borderline'
+            ? (connection.fallbackDepartureAt ?? earliest)
+            : earliest;
       const buffer = REALTIME_BOARDING_BUFFER_SECONDS[vehicle.mode as 'bus' | 'subway'] * 1000;
 
-      if (
-        !Number.isSafeInteger(earliest) ||
-        latest === undefined ||
-        !Number.isSafeInteger(latest) ||
-        latest < earliest ||
-        earliest < clock.earliest + buffer ||
-        latest < clock.latest + buffer ||
-        !live.predictions.some((prediction) => prediction.arrivesAt === earliest) ||
-        !live.predictions.some((prediction) => prediction.arrivesAt === latest)
-      ) {
+      if (!Number.isSafeInteger(earliest) || !Number.isSafeInteger(latest) || latest < earliest) {
+        return null;
+      }
+      // The delivered choice stands when the shared selector makes it again for this reference clock (including a
+      // slower bound continued past the list), or when both bounds are listed vehicles this clock still catches.
+      const selected = selectLiveBoarding(vehicle, clock, now);
+      const reselected =
+        !!selected &&
+        matches(connection, { ...selected.connection, explanation: connection.explanation });
+      const listed =
+        earliest >= clock.earliest + buffer &&
+        latest >= clock.latest + buffer &&
+        live.predictions.some((prediction) => prediction.arrivesAt === earliest) &&
+        live.predictions.some((prediction) => prediction.arrivesAt === latest);
+
+      if (!reselected && !listed) {
         return null;
       }
 

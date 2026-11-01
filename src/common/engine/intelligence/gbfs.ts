@@ -67,6 +67,8 @@ function officialUrl(value: string): URL {
 /** GBFS v2/v3 only. No scraping of operator apps or guessed device positions. */
 export class GbfsVehicleFeed {
   readonly provider: string;
+  /** The one kind a feed without vehicle types carries; a typed feed may carry several. */
+  readonly kinds?: readonly MobilityKind[];
   private readonly url: URL;
   private readonly typesUrl: URL | null;
   private readonly now: () => number;
@@ -88,6 +90,7 @@ export class GbfsVehicleFeed {
       throw new TypeError('GBFS provider is required');
     }
 
+    if (configuration.kind && !configuration.vehicleTypesUrl) this.kinds = [configuration.kind];
     this.url = officialUrl(configuration.vehicleStatusUrl);
     this.typesUrl = configuration.vehicleTypesUrl
       ? officialUrl(configuration.vehicleTypesUrl)

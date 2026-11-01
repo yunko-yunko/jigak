@@ -7,6 +7,7 @@ import {
 } from '../../../common/shared/intelligence/learning.js';
 import {
   journeyFeaturesSchema,
+  journeyLabelsCoverRoute,
   journeySubmissionSchema,
   type JourneyLearningFeatures,
 } from '../../../common/shared/intelligence/journeyLearning.js';
@@ -232,17 +233,22 @@ export class LearningReceipt {
     }
 
     const whole = input.data.journey;
+    // A stage guidance passed without seeing its end has no label; the confirmed arrival still ends the whole journey.
+    const labelled = new Set(ordered.map((sample) => sample.segmentIndex)),
+      lastLabelled = labelled.has(receipt.segments.length - 1);
 
     if (
       whole &&
       (!receipt.journey ||
-        ordered.length !== receipt.segments.length ||
-        ordered.some((sample, index) => sample.segmentIndex !== index) ||
+        receipt.journey.features.modeSequence.length !== receipt.segments.length ||
+        !journeyLabelsCoverRoute(receipt.journey.features.modeSequence, labelled) ||
         whole.startedAt - receipt.issuedAt > 120_000 ||
         Math.abs(whole.startedAt - receipt.journey.features.startedAt) > 120_000 ||
         whole.startedAt < receipt.issuedAt - 3000 ||
         whole.startedAt > ordered[0].startedAt ||
-        whole.endedAt !== ordered.at(-1)!.endedAt ||
+        (lastLabelled
+          ? whole.endedAt !== ordered.at(-1)!.endedAt
+          : whole.endedAt <= ordered.at(-1)!.endedAt) ||
         whole.endedAt > now + 3000 ||
         whole.endedAt <= whole.startedAt ||
         whole.endedAt - whole.startedAt > 4 * 3600_000 ||

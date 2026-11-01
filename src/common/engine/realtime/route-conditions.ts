@@ -53,6 +53,7 @@ export async function enrichRouteConditions(
               timetable: schedule.timetable,
               scheduledConnection: schedule.scheduledConnection,
               scheduleCheck: schedule.scheduleCheck,
+              ...(schedule.headwayEvidence ? { headwayEvidence: schedule.headwayEvidence } : {}),
             }
           : segment;
       }),

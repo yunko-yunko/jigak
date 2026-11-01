@@ -1,5 +1,11 @@
 import { SeoulTimetableService } from '../../../common/engine/realtime/subwayTimetable.js';
+import type { RailGateRuntime } from '../../../common/engine/intelligence/rail-gate-service.js';
 import type { RoutingObjective } from '../../../common/shared/domain/estimatedTiming.js';
+import type {
+  EbikeRouting,
+  ScooterRouting,
+} from '../../../common/engine/simulation/scooter-router.js';
+import type { SharedScooterSimulation } from '../../../common/engine/simulation/shared-scooter-sim.js';
 import { randomUUID } from 'node:crypto';
 import {
   planBaseRoutes,
@@ -43,7 +49,13 @@ import { WeatherFeed } from '../../../common/engine/realtime/weather.js';
 import { SeoulParkingFeed, type ParkingLookup } from '../../../common/engine/realtime/parking.js';
 import { rankRouteIntelligence } from '../../../common/engine/intelligence/arrival.js';
 import { applyPlanningTimingAdjustments } from '../../../common/engine/intelligence/planningTiming.js';
-import { withPedestrianRouting } from '../../../common/engine/connectivity/provider.js';
+import {
+  withPedestrianRouting,
+  type BicycleRouting,
+} from '../../../common/engine/connectivity/provider.js';
+import type { SignalTiming } from '../../../common/engine/realtime/trafficSignals.js';
+import type { SubwayLineService } from '../../../common/engine/realtime/subwayLine.js';
+import type { TravelTimeService } from '../../../common/engine/intelligence/travel-time-service.js';
 import {
   withRouteQueryReuse,
   routeQueryIsReusable,
@@ -78,6 +90,7 @@ import { encodeRouteResponse } from '../../../common/engine/route-response.js';
 import { acquisitionTiming } from '../../../common/engine/acquisition-priority.js';
 
 import type { LearningService as EtaLearningService } from '../../learning/service/learning.service.js';
+import type { ModelRefreshMonitor } from '../../../common/engine/intelligence/model-manifest.js';
 
 export interface RoutingOptions {
   routingObjective?: RoutingObjective;
@@ -96,6 +109,8 @@ export interface RoutingOptions {
     configured: boolean;
     walking: RouteProvider['walking'];
   };
+  /** OpenStreetMap bicycle network for rides between docks, asked before Kakao's quota-limited bicycle routing. */
+  cycling?: BicycleRouting;
   /** Live bus/subway arrivals; omitted or unconfigured keeps provider estimates only. */
   realtime?: RealtimeService;
   timetable?: SeoulTimetableService;
@@ -103,15 +118,32 @@ export interface RoutingOptions {
   nearbyTransit?: NearbyTransitService;
   /** Live road speeds read along routes; unconfigured leaves provider times untouched. */
   traffic?: RoadTrafficService;
+  /** Live pedestrian signal phases at Seoul intersections, timed onto each route's first walk. */
+  signals?: SignalTiming;
+  /** Live train positions along a subway line. */
+  subwayLines?: SubwayLineService;
   /** Live shared-scooter positions and public-bike stock; unconfigured offers neither unverified. */
   mobility?: MobilityFeeds;
   weather?: WeatherFeed;
   parking?: ParkingLookup;
   scooterPolicy?: ScooterConnectionContext['scooterPolicy'];
+  /** Scooter rides re-timed from the bicycle network; set only while a scooter source is simulated. */
+  scooterRouting?: ScooterRouting;
+  /** Permissions for dockless e-bikes (`verify` is asked with `mode: 'ebike'`); absent means no e-bike rentals. */
+  ebikePolicy?: ScooterConnectionContext['ebikePolicy'];
+  /** E-bike rides re-timed from the bicycle network; set only while an e-bike source is simulated. */
+  ebikeRouting?: EbikeRouting;
+  /** Demo kick-scooter simulator (MOBILITY_SIMULATION=scooter); absent means fully off. */
+  scooterSimulation?: SharedScooterSimulation;
   calibration?: EtaCalibration;
   learning?: EtaLearningService;
+  travelTimes?: TravelTimeService;
   publicBus?: PublicBusRuntime;
+  /** Subway gate-to-gate envelope; widens only the slower bound of a subway run. */
+  railGate?: RailGateRuntime;
   publicBicycleShadow?: SpatialBicycleShadowService;
+  /** Follows the refresh job's manifest and report; health shows its summary. Absent means no manifest. */
+  modelRefresh?: ModelRefreshMonitor;
   key?: string;
   corsOrigins?: string[];
   now?: () => number;

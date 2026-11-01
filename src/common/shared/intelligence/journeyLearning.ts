@@ -122,6 +122,24 @@ export const journeyFeaturesSchema = z
 
 export type JourneyLearningFeatures = z.infer<typeof journeyFeaturesSchema>;
 
+/** Stages guidance may pass without seeing their end: outdoor foot stages and the gate passages of a station. */
+const PASSABLE_MODES: readonly string[] = ['walk', 'run', 'entry'];
+/**
+ * A whole journey may leave a stage unlabelled only when guidance passed it without seeing its end, or when such a pass
+ * moved the rider into it (its start was not seen either). Every other stage carries its label.
+ */
+export function journeyLabelsCoverRoute(
+  modeSequence: readonly string[],
+  labelled: ReadonlySet<number>,
+): boolean {
+  return modeSequence.every(
+    (mode, index) =>
+      labelled.has(index) ||
+      PASSABLE_MODES.includes(mode) ||
+      (index > 0 && !labelled.has(index - 1) && PASSABLE_MODES.includes(modeSequence[index - 1])),
+  );
+}
+
 /** Elapsed start-to-final-confirmation includes every wait and transition, including uncategorized gaps. */
 export const journeySubmissionSchema = z
   .object({

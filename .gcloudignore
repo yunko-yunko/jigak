@@ -16,5 +16,5 @@ deploy/*.secrets.*
 *.key
 *.sqlite
 *.sqlite-*
-data
+/data
 *.log

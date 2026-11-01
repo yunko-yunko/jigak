@@ -4,5 +4,8 @@ dist/
 .env.*
 !example.env
 coverage/
-data/
+# Local private data only. Runtime assets under src/**/data are part of the source.
+/data/
 *.log
+# Stored simulator windows (MOBILITY_SIMULATION_WINDOW_DIR).
+.cache/

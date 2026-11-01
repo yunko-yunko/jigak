@@ -1,11 +1,20 @@
 import { serviceCalendarStatus } from '../../../common/engine/realtime/service-calendar.js';
 import { withPedestrianRouting } from '../../../common/engine/connectivity/provider.js';
 import type { RoutingOptions } from '../../routing/domain/routing-options.js';
+import { PUBLIC_BUS_MODEL_VERSION } from '../../../common/engine/intelligence/public-bus-model.js';
+import { fleetByTypeOf } from '../../../common/engine/simulation/sim-window.js';
+import { footWeightsStatus } from '../../../common/engine/simulation/foot-traffic.js';
+import { koreanHolidayOrigin } from '../../../common/engine/intelligence/korean-holidays.js';
+import { modelRefreshSummary } from './model-refresh.js';
 
 export function healthSnapshot(options: RoutingOptions) {
   const clock = options.now ?? Date.now;
   const baseProvider = options.provider!;
-  const provider = withPedestrianRouting(baseProvider, options.pedestrian);
+  const provider = withPedestrianRouting(baseProvider, options.pedestrian, {
+    cycling: options.cycling,
+    scooter: options.scooterRouting,
+    ebike: options.ebikeRouting,
+  });
   const { realtime, traffic, mobility, weather, parking } = options as Required<RoutingOptions>;
 
   return {
@@ -22,14 +31,24 @@ export function healthSnapshot(options: RoutingOptions) {
       roadTraffic: traffic.configured,
       sharedBicycle: mobility.capabilities.sharedBicycle,
       sharedScooter: mobility.capabilities.sharedScooter,
+      sharedEbike: mobility.capabilities.sharedEbike,
       bicycleRouting: baseProvider.configured && !!provider.bicycle,
       scooterRouting: baseProvider.configured && !!provider.scooter && !!options.scooterPolicy,
+      ebikeRouting: baseProvider.configured && !!provider.ebike && !!options.ebikePolicy,
       weather: weather.configured,
       publicParking: parking.configured,
     },
     models: {
+      hgb: options.learning?.hgb.status() ?? {
+        version: 'eta-hgb-v1',
+        active: false,
+        reasons: ['unconfigured'],
+      },
+      travelTimes: options.travelTimes?.status() ?? {
+        configured: false,
+      },
       publicBus: options.publicBus?.status() ?? {
-        version: 'public-bus-duration-v2',
+        version: PUBLIC_BUS_MODEL_VERSION,
         active: false,
         reasons: ['unconfigured'],
       },
@@ -40,10 +59,36 @@ export function healthSnapshot(options: RoutingOptions) {
         deployment: 'shadow',
         reasons: ['unconfigured'],
       },
+      railGate: options.railGate?.status() ?? {
+        version: 'seoul-rail-gate-v1',
+        active: false,
+        reasons: ['unconfigured'],
+      },
+      bicycleRide: mobility.bikeModel?.status() ?? {
+        version: 'seoul-bicycle-spatial-v2',
+        active: false,
+        reasons: ['unconfigured'],
+      },
     },
+    // The refresh job's state: manifest generation, last run, next run and each model's retry state.
+    modelRefresh: modelRefreshSummary(options),
     operatingData: {
       serviceCalendar: serviceCalendarStatus(clock()),
+      holidayFiles: koreanHolidayOrigin(),
     },
+    // The demo simulator (시연용 가상 데이터): which types run and where today's window stands
+    // (building, read from the window store or computed here, §22).
+    simulation: options.scooterSimulation
+      ? {
+          enabled: true,
+          ...options.scooterSimulation.readiness(clock()),
+          fleet: options.scooterSimulation.fleet,
+          fleetByType: fleetByTypeOf(options.scooterSimulation.fleets),
+          modelVersion: options.scooterSimulation.modelVersion,
+          footWeights: footWeightsStatus(),
+          windowStore: options.scooterSimulation.storeConfigured ? 'configured' : 'off',
+        }
+      : { enabled: false },
     // Key presence is configuration, not evidence of an authenticated successful call.
     liveVerified: false,
     realtimeSources: realtime.diagnostics,

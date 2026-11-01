@@ -357,10 +357,14 @@ test('dense real inventory keeps nearest devices within the client limit and exp
 
   const snapshot = await feed.snapshot(SEOUL, 1200);
 
-  assert.equal(snapshot.markers.length, 1000);
+  assert.equal(snapshot.markers.length, 1000, 'an app that asks no limit gets at most 1,000');
   assert.equal(snapshot.markers[0].sourceId, 'real-0');
   assert.equal(snapshot.markers.at(-1)?.sourceId, 'real-999');
-  assert.match(snapshot.sources.find((source) => source.source === 'gbfs')!.message, /1002.*1000/);
+  assert.deepEqual(snapshot.totals, { bicycle: 1002 });
+  assert.match(
+    snapshot.sources.find((source) => source.source === 'gbfs')!.message,
+    /반경 안 총 1,002대 중 가까운 1,000대만 지도에 보여요\./,
+  );
 });
 
 test('TAGO source recovers from fleet errors and distinguishes a known empty area from unsupported coverage', async () => {

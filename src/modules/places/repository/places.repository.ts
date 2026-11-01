@@ -6,6 +6,11 @@ import { ApiError } from '../../../common/errors.js';
 export class PlacesRepository {
   constructor(@Inject(RuntimeRepository) private readonly runtime: RuntimeRepository) {}
 
+  /** No Kakao key: the time comparison's registered places stand in for live search. */
+  get usesLocalCatalogue() {
+    return !this.runtime.options.provider.configured && !!this.runtime.options.travelTimes;
+  }
+
   search(query: { q: string; latitude?: number; longitude?: number }) {
     return this.runtime.options.provider.searchPlaces(query);
   }

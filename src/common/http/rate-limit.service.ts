@@ -11,11 +11,16 @@ export class RateLimitService {
   constructor(@Inject(DatabaseService) private readonly database: DatabaseService) {}
 
   async consume(request: Request, response: Response, next: NextFunction) {
-    const path = request.path.replace(/\/$/, '');
+    // Routes match without regard to case, so "/api/Places" must count as "/api/places".
+    const path = request.path.replace(/\/$/, '').toLowerCase();
     const isSearch = /^\/api\/routes(?:\/search)?$/.test(path);
     const isLearning = path.startsWith('/api/learning/');
-    const isPublic = /^\/api\/(?:places(?:\/reverse)?|realtime\/.+|traffic\/route)$/.test(path);
-    if ((!isSearch && !isLearning && !isPublic) || request.method === 'OPTIONS') {
+    const isPublic = /^\/api\/(?:places(?:\/reverse)?|realtime\/.+|traffic\/route|sim\/.+)$/.test(
+      path,
+    );
+    // Each travel-time comparison may call GPT and several suppliers.
+    const isTravelTime = path === '/api/travel-times';
+    if ((!isSearch && !isLearning && !isPublic && !isTravelTime) || request.method === 'OPTIONS') {
       next();
 
       return;
@@ -27,6 +32,17 @@ export class RateLimitService {
       .digest('hex');
     const now = Date.now(),
       expiresAt = now + 60_000;
+    // Typing in the place picker sends a request every pause, and a venue's phones share one address; the server
+    // caches place answers, so a typing burst rarely reaches Kakao (가정값).
+    const limit = isSearch
+      ? 30
+      : isTravelTime
+        ? 10
+        : path === '/api/places'
+          ? 600
+          : path === '/api/places/reverse'
+            ? 120
+            : 60;
 
     try {
       const window = await this.database.transaction(async (manager) => {
@@ -42,7 +58,7 @@ export class RateLimitService {
         return windows.save(current);
       });
 
-      if (window.count > (isSearch ? 30 : 60)) {
+      if (window.count > limit) {
         response.setHeader('Retry-After', Math.max(1, Math.ceil((window.expiresAt - now) / 1000)));
         throw new ApiError(
           'TOO_MANY_REQUESTS',

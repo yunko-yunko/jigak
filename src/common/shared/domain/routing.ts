@@ -7,6 +7,7 @@ import {
 import { estimateBaseTimeline, type RoutingObjective } from './estimatedTiming.js';
 import { compareRouteEffort, routeEffort } from './routeEffort.js';
 import { REALTIME_BOARDING_BUFFER_SECONDS } from './waitEstimates.js';
+import { listedDepartures, liveDepartureRange, unlistedWaitRange } from './liveBoarding.js';
 import { recommendableVehicles, validLiveVehicles } from './vehicleConstraints.js';
 import { withWalkingOnly } from './mobilityPreferences.js';
 import { DEMO_TEMPLATES, PLACES, type DemoTemplate } from './fixtures.js';
@@ -48,9 +49,13 @@ export function validatePreferences(preferences: MobilityPreferences): void {
     typeof preferences.allowBicycle !== 'boolean' ||
     typeof preferences.bicycleReady !== 'boolean' ||
     (preferences.walkingOnly !== undefined && typeof preferences.walkingOnly !== 'boolean') ||
-    [preferences.allowTaxi, preferences.allowScooter, preferences.hasCar].some(
-      (value) => value !== undefined && typeof value !== 'boolean',
-    )
+    [
+      preferences.allowTaxi,
+      preferences.allowScooter,
+      preferences.allowEbike,
+      preferences.hasScooterLicense,
+      preferences.hasCar,
+    ].some((value) => value !== undefined && typeof value !== 'boolean')
   ) {
     throw new PlanningError('INVALID_INPUT', '이동수단 사용 조건을 확인해 주세요.');
   }
@@ -618,8 +623,10 @@ function withinPreferences(route: Route, preferences: MobilityPreferences): bool
     route.bicycleMeters <= preferences.maxBicycleMeters &&
     (preferences.allowTaxi !== false ||
       !route.segments.some((segment) => segment.mode === 'taxi')) &&
-    (preferences.allowScooter !== false ||
+    ((preferences.allowScooter !== false && preferences.hasScooterLicense !== false) ||
       !route.segments.some((segment) => segment.mode === 'scooter')) &&
+    (preferences.allowEbike !== false ||
+      !route.segments.some((segment) => segment.mode === 'ebike')) &&
     (preferences.hasCar === true || !route.segments.some((segment) => segment.mode === 'car')) &&
     (route.provenance.mode !== 'live' ||
       validLiveVehicles(
@@ -632,6 +639,26 @@ function withinPreferences(route: Route, preferences: MobilityPreferences): bool
 }
 
 const PUBLIC_TRANSPORT_MODES = ['walk', 'run', 'entry', 'wait', 'bus', 'subway'];
+/** Vehicle modes with their own results tab, as the app compares them; an all-foot route is the walking tab. */
+export const TAB_MODES = ['subway', 'bus', 'bicycle', 'ebike', 'scooter', 'taxi', 'car'] as const;
+export type TabMode = (typeof TAB_MODES)[number];
+
+/** The results tab whose vehicle is the only one a route rides (walking, gates and waits are free): the tab shows that
+ * mode's own minutes. A route with two vehicles, or none, is pure for no tab. */
+function pureTabsOf(route: Route): string[] {
+  const own = TAB_MODES.filter((mode) => route.segments.some((segment) => segment.mode === mode));
+  return own.length === 1 ? own : [];
+}
+
+/** The results tabs a route is listed under. */
+function tabsOf(route: Route): string[] {
+  return [
+    ...TAB_MODES.filter((mode) => route.segments.some((segment) => segment.mode === mode)),
+    ...(route.segments.every((segment) => ['walk', 'run', 'entry', 'wait'].includes(segment.mode))
+      ? ['walk']
+      : []),
+  ];
+}
 
 function family(route: Route): string {
   const modes = new Set(route.segments.map((segment) => segment.mode));
@@ -642,15 +669,17 @@ function family(route: Route): string {
       ? 'taxi'
       : modes.has('scooter')
         ? 'scooter'
-        : modes.has('bicycle')
-          ? 'bike'
-          : modes.has('bus') && modes.has('subway')
-            ? 'transit-mixed'
-            : modes.has('bus')
-              ? 'bus'
-              : modes.has('subway')
-                ? 'subway'
-                : 'foot';
+        : modes.has('ebike')
+          ? 'ebike'
+          : modes.has('bicycle')
+            ? 'bike'
+            : modes.has('bus') && modes.has('subway')
+              ? 'transit-mixed'
+              : modes.has('bus')
+                ? 'bus'
+                : modes.has('subway')
+                  ? 'subway'
+                  : 'foot';
 }
 
 /** Fastest first, but at most two per mode family so taxi variants cannot crowd out a car or subway. */
@@ -736,6 +765,7 @@ function selectRoutes(
   useful.sort(compare);
 
   const selected = limit > 3 ? diverse(useful, limit) : useful.slice(0, limit);
+  const pinned = new Set(useful.slice(0, 1));
 
   if (limit > 3) {
     // With taxis and cars competing, keep the fastest bus/subway-only option visible.
@@ -748,6 +778,7 @@ function selectRoutes(
     if (transitOnly && !selected.includes(transitOnly)) {
       selected[selected.length - 1] = transitOnly;
     }
+    if (transitOnly) pinned.add(transitOnly);
   }
 
   // Keep the minimum physical-effort option available if faster combinations occupy all slots.
@@ -758,6 +789,7 @@ function selectRoutes(
   if (selected.length > 1 && leastEffort && !selected.includes(leastEffort)) {
     selected[limit > 3 ? Math.max(1, selected.length - 2) : selected.length - 1] = leastEffort;
   }
+  if (leastEffort) pinned.add(leastEffort);
 
   if (preserveWalkingFallback) {
     // A provider walking route needs no vehicle connection. Do not synthesize one
@@ -773,6 +805,48 @@ function selectRoutes(
 
     if (selected.length > 1 && walking && !selected.includes(walking)) {
       selected[selected.length - 1] = walking;
+    }
+    if (walking) pinned.add(walking);
+  }
+
+  if (limit > 3) {
+    // Every results tab with a route keeps its fastest one. It replaces the slowest listed route
+    // that no other tab depends on; the fastest route and the picks above are never replaced.
+    const tabs = new Map(useful.map((route) => [route, tabsOf(route)]));
+    const listed = (tab: string) => selected.filter((route) => tabs.get(route)!.includes(tab));
+    for (const tab of [...TAB_MODES, 'walk']) {
+      const best = useful.find((route) => tabs.get(route)!.includes(tab));
+      if (!best || listed(tab).length) continue;
+      const replaced = [...selected]
+        .sort(compare)
+        .reverse()
+        .find(
+          (route) =>
+            !pinned.has(route) && tabs.get(route)!.every((other) => listed(other).length > 1),
+        );
+      if (!replaced) continue;
+      selected[selected.indexOf(replaced)] = best;
+      pinned.add(best);
+    }
+    // A tab also keeps its fastest pure route when only mixtures with that vehicle are listed: its minutes are the
+    // mode's own, not a taxi's with a few bike minutes before it. It replaces a listed route no tab depends on.
+    const pure = new Map(useful.map((route) => [route, pureTabsOf(route)]));
+    const listedPure = (tab: string) => selected.filter((route) => pure.get(route)!.includes(tab));
+    for (const tab of TAB_MODES) {
+      const best = useful.find((route) => pure.get(route)!.includes(tab));
+      if (!best || listedPure(tab).length) continue;
+      const replaced = [...selected]
+        .sort(compare)
+        .reverse()
+        .find(
+          (route) =>
+            !pinned.has(route) &&
+            tabs.get(route)!.every((other) => listed(other).length > 1) &&
+            pure.get(route)!.every((other) => listedPure(other).length > 1),
+        );
+      if (!replaced) continue;
+      selected[selected.indexOf(replaced)] = best;
+      pinned.add(best);
     }
   }
 
@@ -1372,6 +1446,166 @@ export function boardingWaitRange(segment: BaseSegment, reach: TimeRange): Durat
     : null;
 }
 
+export const LIVE_HEADWAY_FALLBACK_EXPLANATION =
+  '도착 예정 차량 기준이에요. 이 차를 놓치면 다음 차량까지 평균 배차 간격으로 계산했어요.';
+export const LIVE_TIMETABLE_FALLBACK_EXPLANATION =
+  '도착 예정 차량 기준이에요. 이 차를 놓치면 공개 시간표의 다음 열차로 계산했어요.';
+export const LIVE_MISSED_HEADWAY_EXPLANATION =
+  '실시간 도착 예정 차량은 정류장에 닿기 전에 지나가요. 다음 차량까지 평균 배차 간격으로 계산했어요.';
+export const LIVE_MISSED_TIMETABLE_EXPLANATION =
+  '실시간 도착 예정 차량은 정류장에 닿기 전에 지나가요. 공개 시간표의 다음 열차로 계산했어요.';
+export const LIVE_LAST_SERVICE_EXPLANATION =
+  '도착 예정 차량 기준이에요. 조금 늦으면 막차를 놓쳐 이 경로로 갈 수 없어요.';
+
+export const LIVE_MISSED_HEADWAY_RISK: Risk = {
+  code: 'unverified-schedule',
+  severity: 'warning',
+  title: '다음 차량은 평균 배차로 계산',
+  description: '실시간 도착 정보에 아직 나오지 않은 다음 차량은 평균 배차 간격으로 계산했어요.',
+};
+export const LIVE_MISSED_TIMETABLE_RISK: Risk = {
+  code: 'unverified-schedule',
+  severity: 'info',
+  title: '공개 시간표 적용',
+  description:
+    '실시간 도착 정보에 아직 나오지 않은 다음 열차는 공개 시간표로 계산했어요. 실시간 지연이나 결행은 반영되지 않을 수 있어요.',
+};
+export const LAST_SERVICE_RISK: Risk = {
+  code: 'borderline-boarding',
+  severity: 'warning',
+  title: '막차를 놓칠 수 있어요',
+  description: '예상보다 늦게 정류장에 닿으면 막차가 떠나 이 경로로는 갈 수 없어요.',
+};
+
+/** One live boarding decision: the boarding clock range, the wait segment's range and the connection. */
+export interface LiveBoardingSelection {
+  departure: TimeRange;
+  wait: DurationRange;
+  connection: Omit<Connection, 'explanation' | 'fallbackArrivalAt'>;
+  /** The slower access clock misses every listed vehicle and continues on the shared continuation. */
+  headwayFallback: boolean;
+  /** The earliest access clock still catches a listed vehicle. False: every clock misses the list and both bounds
+   * board the shared continuation, exactly as a slower bound would. */
+  boardsListed: boolean;
+  /** How the slower bound was continued past the list. */
+  continuation?: 'published-departure' | 'wait-rule';
+  /** The slower access clock misses the last vehicle; its bound stays on that vehicle and the route carries the risk. */
+  missesLastService: boolean;
+}
+
+export const liveBoardingExplanation = (selected: LiveBoardingSelection, listed: string) =>
+  selected.missesLastService
+    ? LIVE_LAST_SERVICE_EXPLANATION
+    : !selected.boardsListed
+      ? selected.continuation === 'published-departure'
+        ? LIVE_MISSED_TIMETABLE_EXPLANATION
+        : LIVE_MISSED_HEADWAY_EXPLANATION
+      : !selected.headwayFallback
+        ? listed
+        : selected.continuation === 'published-departure'
+          ? LIVE_TIMETABLE_FALLBACK_EXPLANATION
+          : LIVE_HEADWAY_FALLBACK_EXPLANATION;
+
+/** Choose the listed vehicle on the earliest access clock. When only the slower clock misses every listed
+ * vehicle, keep that vehicle and bound the slower side by the shared continuation (published timetable or headway
+ * rule); when nothing runs after the list, the slower side stays on the last vehicle. When even the earliest clock
+ * misses the list, both bounds board the same continuation, never earlier than one headway after the last listed
+ * vehicle, so a slower access can never be given an earlier bus. Shared by the graph, the planner and the app's
+ * re-validation so all three derive identical values. */
+export function selectLiveBoarding(
+  segment: BaseSegment,
+  reach: TimeRange,
+  now: number,
+): LiveBoardingSelection | null {
+  const live = segment.realtime;
+  if (!live || live.status !== 'live' || !live.predictions.length || !isVehicleSegment(segment))
+    return null;
+  const range = liveDepartureRange(segment, live, reach, now);
+  if (!range) return null;
+  const bufferSeconds = REALTIME_BOARDING_BUFFER_SECONDS[segment.mode as 'bus' | 'subway'],
+    buffer = bufferSeconds * SECOND;
+  const departures = listedDepartures(live),
+    { earliest } = range.departure;
+  const boardingMarginSeconds = Math.floor((earliest - reach.latest) / SECOND) - bufferSeconds;
+  if (!range.earliestListed) {
+    // Every access clock misses the list: the same continuation (bounded by the last listed vehicle) for both sides.
+    const wait = unlistedWaitRange(segment, live, reach.earliest, reach.latest, now, true);
+    if (!wait) return null;
+    const latest = range.departure.latest;
+    return {
+      departure: { earliest, latest },
+      wait,
+      headwayFallback: true,
+      boardsListed: false,
+      continuation: range.continuation,
+      missesLastService: false,
+      connection: {
+        departureAt: earliest,
+        ...(latest === earliest ? {} : { fallbackDepartureAt: latest }),
+        status: latest === earliest ? 'comfortable' : 'borderline',
+        boardingMarginSeconds,
+      },
+    };
+  }
+  if (range.latestListed) {
+    const latest = range.departure.latest,
+      borderline = earliest !== latest,
+      fallbackDepartureAt = borderline
+        ? latest
+        : departures.find((departure) => departure > latest);
+    return {
+      departure: { earliest, latest },
+      wait: boardingWaitRange(segment, reach)!,
+      headwayFallback: false,
+      boardsListed: true,
+      missesLastService: false,
+      connection: {
+        departureAt: earliest,
+        ...(fallbackDepartureAt === undefined ? {} : { fallbackDepartureAt }),
+        status: borderline ? 'borderline' : 'comfortable',
+        boardingMarginSeconds,
+      },
+    };
+  }
+  // Access clocks up to the last listed vehicle's boarding boundary still catch a listed vehicle.
+  const lastBoarding = departures.at(-1)! - buffer;
+  const listed = boardingWaitRange(segment, { earliest: reach.earliest, latest: lastBoarding });
+  if (!listed) return null;
+  if (range.missesLastService) {
+    const last = range.departure.latest;
+    return {
+      departure: { earliest, latest: last },
+      wait: listed,
+      headwayFallback: false,
+      boardsListed: true,
+      missesLastService: true,
+      connection: {
+        departureAt: earliest,
+        ...(last === earliest ? {} : { fallbackDepartureAt: last }),
+        status: 'borderline',
+        boardingMarginSeconds,
+      },
+    };
+  }
+  const unlisted = unlistedWaitRange(segment, live, lastBoarding, reach.latest, now);
+  if (!unlisted) return null;
+  const fallbackDepartureAt = range.departure.latest;
+  return {
+    departure: { earliest, latest: fallbackDepartureAt },
+    wait: { min: Math.min(listed.min, unlisted.min), max: Math.max(listed.max, unlisted.max) },
+    headwayFallback: true,
+    boardsListed: true,
+    continuation: range.continuation,
+    missesLastService: false,
+    connection: {
+      departureAt: earliest,
+      fallbackDepartureAt,
+      status: 'borderline',
+      boardingMarginSeconds,
+    },
+  };
+}
+
 const samePosition = (a: Place, b: Place) =>
   Math.abs(a.latitude - b.latitude) < 0.000001 && Math.abs(a.longitude - b.longitude) < 0.000001;
 
@@ -1385,6 +1619,12 @@ const connectionMatches = (a: Connection, b: Connection) =>
   a.fallbackDepartureAt === b.fallbackDepartureAt &&
   a.status === b.status &&
   a.boardingMarginSeconds === b.boardingMarginSeconds;
+
+/** Seconds a gate-to-gate subway envelope added after the leg's own (timetable) ride; never negative. */
+const railEnvelopeSeconds = (segment: BaseSegment) =>
+  segment.railEtaPrediction
+    ? segment.durationSeconds.max - segment.railEtaPrediction.sourceDurationSeconds.max
+    : 0;
 
 /** Validate an internal graph handoff and derive its chronology from actual observed boardings. */
 export function evaluateBaseTimeline(
@@ -1427,6 +1667,10 @@ export function evaluateBaseTimeline(
       return null;
     }
 
+    if (railEnvelopeSeconds(segment) < 0) {
+      return null;
+    }
+
     if (segment.scheduledConnection) {
       const scheduled = segment.scheduledConnection;
 
@@ -1461,7 +1705,7 @@ export function evaluateBaseTimeline(
           !sameNumber(segment.durationSeconds.min, selected.wait.min) ||
           !sameNumber(segment.durationSeconds.max, selected.wait.max) ||
           !sameNumber(vehicle.durationSeconds.min, selected.ride.min) ||
-          !sameNumber(vehicle.durationSeconds.max, selected.ride.max)
+          !sameNumber(vehicle.durationSeconds.max - railEnvelopeSeconds(vehicle), selected.ride.max)
         ) {
           return null;
         }
@@ -1486,9 +1730,10 @@ export function evaluateBaseTimeline(
           return null;
         }
 
+        // The timetable fixes the train; a subway envelope only delays the latest exit after it.
         clock = {
           earliest: early,
-          latest: late,
+          latest: late + railEnvelopeSeconds(segment) * SECOND,
         };
       }
     } else if (connection) {
@@ -1519,34 +1764,26 @@ export function evaluateBaseTimeline(
           return null;
         }
 
-        const departures = catchableDepartures(vehicle, clock),
-          wait = boardingWaitRange(vehicle, clock);
+        const selected = selectLiveBoarding(vehicle, clock, now);
 
-        if (!departures || !wait) {
+        if (!selected) {
           return null;
         }
 
-        const borderline = departures.earliest !== departures.latest;
-        const fallback = borderline ? departures.latest : departures.fallback;
-        const margin =
-          Math.floor((departures.earliest - clock.latest) / SECOND) -
-          REALTIME_BOARDING_BUFFER_SECONDS[vehicle.mode as 'bus' | 'subway'];
+        const expected = selected.connection;
 
         if (
-          connection.departureAt !== departures.earliest ||
-          connection.status !== (borderline ? 'borderline' : 'comfortable') ||
-          connection.fallbackDepartureAt !== fallback ||
-          connection.boardingMarginSeconds !== margin ||
-          !sameNumber(segment.durationSeconds.min, wait.min) ||
-          !sameNumber(segment.durationSeconds.max, wait.max)
+          connection.departureAt !== expected.departureAt ||
+          connection.status !== expected.status ||
+          connection.fallbackDepartureAt !== expected.fallbackDepartureAt ||
+          connection.boardingMarginSeconds !== expected.boardingMarginSeconds ||
+          !sameNumber(segment.durationSeconds.min, selected.wait.min) ||
+          !sameNumber(segment.durationSeconds.max, selected.wait.max)
         ) {
           return null;
         }
 
-        clock = {
-          earliest: departures.earliest,
-          latest: departures.latest,
-        };
+        clock = { ...selected.departure };
       } else {
         const wait = segments[index - 1];
 
@@ -1678,6 +1915,8 @@ export function planBaseRoutes(
     const segments: Segment[] = [];
     let realtimeProvenance: Provenance | null = null;
     let usedLiveBoardings = 0;
+    let missesLastService = false;
+    let continuedPastList: LiveBoardingSelection['continuation'] | null = null;
 
     ordered.forEach((segment, index) => {
       if (base.timingEvaluatedAt !== request.now && isExpectedWait(segment)) {
@@ -1689,7 +1928,7 @@ export function planBaseRoutes(
           live &&
           freshBoarding(live.receivedAt, request.now) &&
           freshBoarding(live.observedAt, request.now) &&
-          catchableDepartures(next, clock)
+          selectLiveBoarding(next, clock, request.now)
         ) {
           return;
         }
@@ -1768,14 +2007,14 @@ export function planBaseRoutes(
         base.timingEvaluatedAt !== request.now && isVehicleSegment(segment)
           ? segment.realtime
           : undefined;
-      const departures =
+      const selected =
         live &&
         freshBoarding(live.receivedAt, request.now) &&
         freshBoarding(live.observedAt, request.now)
-          ? catchableDepartures(segment, clock)
+          ? selectLiveBoarding(segment, clock, request.now)
           : null;
 
-      if (live && departures) {
+      if (live && selected) {
         realtimeProvenance = {
           ...provenance,
           provider: live.provider,
@@ -1784,25 +2023,21 @@ export function planBaseRoutes(
           isRealtime: true,
         };
 
-        const wait = boardingWaitRange(segment, clock)!;
-        const departure = {
-          earliest: departures.earliest,
-          latest: departures.latest,
-        };
-        const borderline = departures.earliest !== departures.latest;
-        const buffer = REALTIME_BOARDING_BUFFER_SECONDS[segment.mode as 'bus' | 'subway'];
+        const wait = selected.wait;
+        const departure = { ...selected.departure };
         const connection: Connection = {
-          departureAt: departure.earliest,
-          fallbackDepartureAt: borderline ? departures.latest : departures.fallback,
-          status: borderline ? 'borderline' : 'comfortable',
-          boardingMarginSeconds: Math.floor((departures.earliest - clock.latest) / SECOND) - buffer,
-          explanation: borderline
-            ? '조금 늦으면 다음 차를 타게 돼요. 늦은 예상에 다음 차를 반영했어요.'
-            : '실시간 도착 정보 기준으로 탈 수 있는 차량이에요.',
+          ...selected.connection,
+          explanation: liveBoardingExplanation(
+            selected,
+            selected.connection.status === 'borderline'
+              ? '조금 늦으면 다음 차를 타게 돼요. 늦은 예상에 다음 차를 반영했어요.'
+              : '실시간 도착 정보 기준으로 탈 수 있는 차량이에요.',
+          ),
         };
-        const prediction = live.predictions.find(
-          (value) => value.arrivesAt === departures.earliest,
-        );
+        if (selected.missesLastService) missesLastService = true;
+        if (!selected.boardsListed && continuedPastList !== 'wait-rule')
+          continuedPastList = selected.continuation ?? 'wait-rule';
+        const prediction = live.predictions.find((value) => value.arrivesAt === departure.earliest);
 
         segments.push({
           id: `${segment.id}:wait`,
@@ -1865,11 +2100,21 @@ export function planBaseRoutes(
       const last = segments[segments.length - 1];
 
       for (const segment of segments) {
-        if (segment.connection?.status === 'borderline') {
+        if (
+          segment.connection?.status === 'borderline' &&
+          segment.connection.fallbackDepartureAt !== undefined
+        ) {
           segment.connection.fallbackArrivalAt = last.timeRange.latest;
         }
       }
     }
+    // A slower access that misses the last vehicle has no arrival on this route. Keep the route only when the point
+    // estimate still boards that vehicle and routes are ranked on it; a conservative ranking would trust a missed bound.
+    if (
+      missesLastService &&
+      (options.objective !== 'estimated-arrival' || !estimateBaseTimeline(segments, request.now))
+    )
+      continue;
 
     const transit = segments.some(isVehicleSegment);
     const vehicles = segments.filter(isVehicleSegment);
@@ -1886,6 +2131,15 @@ export function planBaseRoutes(
       },
       ...(base.notes ?? []),
     ];
+    if (missesLastService) risks.push(LAST_SERVICE_RISK);
+    // A vehicle no feed has listed yet is not observed: the boarding stays on the shared continuation, and the route
+    // says so (urgency then never presents it as a verified real-time boarding).
+    if (continuedPastList)
+      risks.push(
+        continuedPastList === 'published-departure'
+          ? LIVE_MISSED_TIMETABLE_RISK
+          : LIVE_MISSED_HEADWAY_RISK,
+      );
     const allTimed =
       transit &&
       vehicles.every(

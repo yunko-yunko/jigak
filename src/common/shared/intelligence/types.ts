@@ -26,6 +26,8 @@ export interface MobilityMarker {
   source: 'seoul-bike' | 'tago-pm' | 'gbfs';
   /** For GBFS this records whether endpoint geofencing/return rules were verified. */
   returnPolicy: 'station' | 'unverified';
+  /** Set when the server's demo simulator, not a real operator, produced this marker. */
+  simulated?: true;
 }
 
 export interface MobilitySourceStatus {
@@ -42,6 +44,8 @@ export interface MobilitySnapshot {
   radiusMeters: number;
   /** False means these markers do not cover every local operator or vehicle. */
   completeCoverage: false;
+  /** How many of each kind are in the radius before the marker cap; absent from older servers. */
+  totals?: Partial<Record<MobilityKind, number>>;
 }
 
 export interface WeatherSnapshot {

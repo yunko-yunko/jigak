@@ -19,6 +19,7 @@ docs
 test
 tests
 *.log
+.cache
 npm-debug.log*
 compose.yaml
 README.md
