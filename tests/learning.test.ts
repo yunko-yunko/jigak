@@ -4,6 +4,7 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { Test } from '@nestjs/testing';
 import { createTestDatabase } from './helpers/auth-database.js';
+import { OutdatedLearningConsentError } from '../src/modules/learning/domain/learning-receipt.js';
 import { LearningRepository } from '../src/modules/learning/repository/learning.repository.js';
 import { LearningService } from '../src/modules/learning/service/learning.service.js';
 import { LearningController } from '../src/modules/learning/controller/learning.controller.js';
@@ -318,12 +319,15 @@ test('whole journeys include gaps, require expanded consent and delete atomicall
       },
     };
 
-    await assert.rejects(
-      h.store.submit({
-        ...complete,
-        consentVersion: 'eta-learning-v1',
-      }),
-    );
+    for (const consentVersion of ['eta-learning-v1', 'eta-learning-v2']) {
+      await assert.rejects(
+        h.store.submit({
+          ...complete,
+          consentVersion,
+        }),
+        OutdatedLearningConsentError,
+      );
+    }
     await assert.rejects(
       h.store.submit({
         ...complete,
@@ -907,6 +911,17 @@ test('Nest learning HTTP endpoints preserve paths, success status, consent error
 
     assert.equal(bad.status, 400);
     assert.equal((await bad.json()).error.code, 'INVALID_INPUT');
+
+    // Old app builds still send opt-ins given under an older text: refused with their own code, never relabelled.
+    for (const consentVersion of ['eta-learning-v1', 'eta-learning-v2']) {
+      const refused = await send({ ...body(ticket), consentVersion });
+
+      assert.equal(refused.status, 403);
+      assert.equal((await refused.json()).error.code, 'CONSENT_REQUIRED');
+    }
+
+    assert.equal((await h.store.observations()).length, 0);
+    assert.equal(ETA_LEARNING_CONSENT_VERSION, 'eta-learning-v3');
 
     const response = await send(body(ticket));
 

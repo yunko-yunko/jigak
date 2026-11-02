@@ -1,4 +1,6 @@
-export const CONSENT_VERSION = '2026-10-02';
+export const CONSENT_VERSION = '2026-11-02';
+/** An app build that still sends an earlier version cannot show the new text, so it is told to update rather than to tick again. */
+export const OUTDATED_CONSENT_MESSAGE = '약관이 바뀌었어요. 앱을 업데이트한 뒤 다시 동의해 주세요.';
 export const SOCIAL_PROVIDERS = ['kakao', 'google', 'apple'] as const;
 
 export type SocialProviderId = (typeof SOCIAL_PROVIDERS)[number];

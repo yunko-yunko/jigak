@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  DEV ONLY (this Mac). Production runs as a Cloud Run Job, see jigak-backend/docs/MODEL-REFRESH.md.
+  Runs the refresh daily at 05:30 local time (this Mac is on KST) with a local store folder.
+  NOT installed. To install after reading it:
+    launchctl bootstrap gui/$(id -u) /Users/dbswnstj/works/projects/digitalcontentcompetition_whale/jigak-backend/model-refresh/local/kr.jigakjido.model-refresh.plist
+  To remove:
+    launchctl bootout gui/$(id -u)/kr.jigakjido.model-refresh
+  The store folder must exist and hold a manifest (npm --prefix mvp run models:store:init -- --store <dir>, from the monorepo root).
+  mvp forwards models:refresh to jigak-backend/model-refresh/scripts/models-refresh.ts; keys come from mvp/.env (loaded by that script). Nothing secret is written here.
+  launchd does not run missed jobs while the Mac sleeps at 05:30; it runs once on wake, which is fine for an idempotent refresh.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>kr.jigakjido.model-refresh</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/npm</string>
+    <string>--prefix</string>
+    <string>/Users/dbswnstj/works/projects/digitalcontentcompetition_whale/mvp</string>
+    <string>run</string>
+    <string>models:refresh</string>
+    <string>--</string>
+    <string>--store</string>
+    <string>/Users/dbswnstj/works/projects/digitalcontentcompetition_whale/mvp/data/model-store-local</string>
+    <string>--mode</string>
+    <string>local</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/dbswnstj/works/projects/digitalcontentcompetition_whale/mvp</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/Library/Frameworks/Python.framework/Versions/3.14/bin:/usr/bin:/bin</string>
+    <key>MODEL_REFRESH_MODE</key>
+    <string>local</string>
+    <key>TZ</key>
+    <string>Asia/Seoul</string>
+    <key>SSL_CERT_FILE</key>
+    <string>/etc/ssl/cert.pem</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>5</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/dbswnstj/Library/Logs/jigak-model-refresh.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/dbswnstj/Library/Logs/jigak-model-refresh.log</string>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

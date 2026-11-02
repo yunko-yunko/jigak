@@ -1536,6 +1536,85 @@ export async function bicycleConnection(
   return hasBicycleAvailabilityEvidence(segments, context.now) ? segments : null;
 }
 
+/** Share of the rider's 따릉이 cap a shortened whole-trip ride aims at; the routed ride must still fit the cap (가정값). */
+const CAPPED_RIDE_SHARE = 0.9;
+/** At most this many returns are routed for a shortened whole trip. */
+export const MAX_CAPPED_BICYCLE_RETURNS = 2;
+
+/**
+ * A whole trip that is within the rider's 따릉이 cap as the crow flies can still ride further than the cap on the bicycle
+ * network (a river crossing). Such a ride returns at a dock short of the destination and the rider walks the rest. The
+ * returns are docks near the point the whole trip's own ride (`stations`, already fetched by the search) reaches at the
+ * cap's share, nearest the destination first. Empty when that ride fits the cap; each return is still routed and must fit.
+ */
+export async function cappedBicycleStationPairs(
+  context: Pick<MultimodalContext, 'mobility' | 'now' | 'provider' | 'budget'>,
+  preferences: MobilityPreferences,
+  stations: BicycleStationPair,
+  to: Place,
+  limit = MAX_CAPPED_BICYCLE_RETURNS,
+): Promise<BicycleStationPair[]> {
+  if (!context.provider.bicycle || !context.mobility?.bikes.configured) return [];
+  const cap = preferences.maxBicycleMeters;
+  if (!(cap > 0)) return [];
+  const hire = stationPlace(stations.hire),
+    drop = stationPlace(stations.drop);
+  const ride = (
+    await context.provider.bicycle({ origin: hire, destination: drop }, context.budget)
+  )[0];
+  if (!ride || !(ride.distanceMeters > cap)) return [];
+  const path = ride.segments.flatMap((segment) =>
+    segment.mode === 'bicycle' ? (segment.polyline ?? []) : [],
+  );
+  const steps = path.slice(1).map((point, index) => metersBetween(path[index], point));
+  const length = steps.reduce((sum, step) => sum + step, 0);
+  if (path.length < 2 || !(length > 0)) return [];
+  // Walk the ride's own path to where the cap's share of its distance ends.
+  let left = ((cap * CAPPED_RIDE_SHARE) / ride.distanceMeters) * length,
+    point: Place | null = null;
+  for (const [index, step] of steps.entries()) {
+    if (left <= step) {
+      const share = step > 0 ? left / step : 0,
+        a = path[index],
+        b = path[index + 1];
+      point = {
+        id: 'capped-bicycle-return',
+        name: to.name,
+        address: '',
+        latitude: a.latitude + (b.latitude - a.latitude) * share,
+        longitude: a.longitude + (b.longitude - a.longitude) * share,
+      };
+      break;
+    }
+    left -= step;
+  }
+  if (!point) return [];
+  return (await bicycleAccessStationCandidates(context, point, false))
+    .filter((station) => station.id !== stations.hire.id && station.id !== stations.drop.id)
+    .sort(
+      (left, right) =>
+        metersBetween(left, to) - metersBetween(right, to) || left.id.localeCompare(right.id),
+    )
+    .slice(0, Math.max(0, limit))
+    .map((station) => ({ hire: stations.hire, drop: station }));
+}
+
+/** A 따릉이 ride that returns at `stations.drop`, away from `to`, followed by the walk from that dock to `to`. */
+export async function cappedBicycleConnection(
+  context: MultimodalContext,
+  preferences: MobilityPreferences,
+  from: Place,
+  to: Place,
+  prefix: string,
+  stations: BicycleStationPair,
+): Promise<BaseSegment[] | null> {
+  const drop = stationPlace(stations.drop);
+  const ride = await bicycleConnection(context, preferences, from, drop, prefix, stations);
+  if (!ride) return null;
+  const egress = await walkBetween(context, `${prefix}-egress`, drop, to, `${to.name}까지 걷기`);
+  return [...ride, ...(egress.distanceMeters > 0 ? [egress] : [])];
+}
+
 export async function multimodalRoutes(
   request: MultimodalRequest,
   bases: { walking: BaseRoute[]; transit: BaseRoute[] },

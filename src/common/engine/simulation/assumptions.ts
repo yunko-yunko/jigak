@@ -13,7 +13,7 @@
  */
 
 /** Bump when model code changes behaviour without changing a number below. */
-export const SIM_MODEL_REVISION = 'micromobility-sim-2026-11-02.3';
+export const SIM_MODEL_REVISION = 'micromobility-sim-2026-11-02.4';
 
 export const ASSUMPTIONS = {
   /**
@@ -90,14 +90,27 @@ export const ASSUMPTIONS = {
     placementHours: [4, 9],
     placementFloorShare: 0.5,
     /**
-     * Destination search around a drawn point, and its return weighting floor. The floor was 0.1
-     * a dock-hour and sent half the non-pair trips to the quietest docks (U-SPACE §2.6); 0.015
-     * and a pull fading as exp(-metres / `returnDecayMeters`) from the drawn point (가정값, §22).
+     * A trip end's attraction is its return weight plus this floor a dock-hour. The floor was 0.1
+     * and sent half the non-pair trips to the quietest docks (U-SPACE §2.6); 0.015 (가정값, §22).
      */
-    destinationSearchMeters: 600,
     returnWeightFloor: 0.015,
-    returnDecayMeters: 400,
     maxDestinationRedraws: 2,
+    /**
+     * §22.10 riders off the pair table pick a dock in a ring at the drawn trip distance (±25%,
+     * widened 1.6× up to three times while empty) by attraction × a daily balance B, solved over
+     * 24 equal-probability distances of the day's rider mix: 12 rounds of B ← clip(B × (out /
+     * in)^0.8, 0.25, 4) (가정값, doubly constrained gravity model; destmodel prototype 11-02:
+     * the busiest 5% of cells lost 12–15% of their vehicles a day to the old random bearing,
+     * 따릉이 itself is within ±3%).
+     */
+    ringHalfWidth: 0.25,
+    ringWiden: 1.6,
+    ringWidenings: 3,
+    ringQuantiles: 24,
+    ringMaxMeters: 9_000,
+    balanceIterations: 12,
+    balanceExponent: 0.8,
+    balanceClip: [0.25, 4],
   },
 
   /**
@@ -807,9 +820,12 @@ export const ASSUMPTIONS = {
    * seasonal reserve (`depot.reserveByMonth`) is added to `ready`. §22.9 measured again at 04:05
    * on 2026-11-04 after 14 days run on from the template (real fleet, the §22 demand and the
    * swap rounds): hidden low packs 5.9%, the shelf 4.3% above the reserve (deploying included).
+   * §22.10 low packs 5.8%: 14 days to 04:00 of 2026-11-04 and of 11-24 at the real fleet with the
+   * destination model (5.82%, 5.84%); the 6,000-scooter test fleet settles at 6.3% and the
+   * scooters of a 4,000 + 8,000 one at 5.0% (six seeds each), both within 1% of the fleet.
    */
   template: {
-    lowBattery: 0.059,
+    lowBattery: 0.058,
     broken: 0.0001,
     outOfArea: 0.0001,
     missing: 0.0064,
@@ -1020,10 +1036,12 @@ export const ASSUMPTIONS = {
      * §11.2 the e-bike's steady-state template, shares of the e-bike fleet. Measured at 04:00
      * over a mixed 14-day continuous run (2026-11-12..25, 4,000 scooters + 8,000 e-bikes, the
      * same method as the scooter's, §18.6). §22.9 measured again as the scooter's: hidden low
-     * packs 5.4%, the shelf 5.7% above the reserve.
+     * packs 5.4%, the shelf 5.7% above the reserve. §22.10 low packs 4.9%: the real fleet's 14
+     * days to 2026-11-04 and 11-24 leave 5.25% and 4.51%, the 8,000 e-bikes of the mixed test
+     * fleet 4.9% (six seeds; 5.3% after 21 days).
      */
     template: {
-      lowBattery: 0.054,
+      lowBattery: 0.049,
       broken: 0.0002,
       outOfArea: 0.0001,
       missing: 0.0052,

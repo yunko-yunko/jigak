@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   ETA_LEARNING_CONSENT_VERSION,
   etaLearningFeaturesSchema,
+  hasOutdatedEtaLearningConsent,
   type EtaLearningFeatures,
 } from '../../../common/shared/intelligence/learning.js';
 import {
@@ -35,7 +36,7 @@ export const receiptSchema = z
 export const submissionSchema = z
   .object({
     ticket: z.string().min(40).max(100_000),
-    consentVersion: z.enum(['eta-learning-v1', ETA_LEARNING_CONSENT_VERSION]),
+    consentVersion: z.literal(ETA_LEARNING_CONSENT_VERSION),
     samples: z
       .array(
         z
@@ -51,11 +52,7 @@ export const submissionSchema = z
       .max(100),
     journey: journeySubmissionSchema.optional(),
   })
-  .strict()
-  .refine(
-    (value) => value.journey === undefined || value.consentVersion === ETA_LEARNING_CONSENT_VERSION,
-    'whole-journey-requires-current-consent',
-  );
+  .strict();
 
 export const deletionSchema = z.union([
   z
@@ -71,6 +68,15 @@ export const deletionSchema = z.union([
 ]);
 
 export const invalidLearning = () => new Error('학습 기록의 동의·서명·완료 시각을 확인해 주세요.');
+
+/** The rider opted in under an older text (an old app build). Nothing of it is stored; the controller answers CONSENT_REQUIRED. */
+export class OutdatedLearningConsentError extends Error {
+  constructor() {
+    super('이동 시간 학습 안내가 바뀌었어요. 앱을 업데이트한 뒤 설정에서 다시 켜 주세요.');
+
+    this.name = 'OutdatedLearningConsentError';
+  }
+}
 
 export type Receipt = z.infer<typeof receiptSchema>;
 
@@ -194,6 +200,10 @@ export class LearningReceipt {
   }
 
   validateSubmission(body: unknown) {
+    if (hasOutdatedEtaLearningConsent(body)) {
+      throw new OutdatedLearningConsentError();
+    }
+
     const input = submissionSchema.safeParse(body);
 
     if (!input.success) {

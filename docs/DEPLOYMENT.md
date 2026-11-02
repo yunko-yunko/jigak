@@ -75,6 +75,7 @@ npm run env:deployment
 | 시연용 가상 킥보드·전기자전거 | `MOBILITY_SIMULATION`, `MOBILITY_SIMULATION_FLEET`, `MOBILITY_SIMULATION_EBIKE_FLEET`, `MOBILITY_SIMULATION_SEED`                                                                                                                 | `scooter`, `ebike` 또는 `scooter,ebike`로 켬. 시연용 가상 데이터이며 실제 운영사 아님                                                                           |
 | 외부 검증 모델                | `ETA_MODEL_PATH`, `ETA_PUBLIC_BUS_MODEL_PATH`, `ETA_SPATIAL_BUS_MODEL_PATH`, `ETA_RAIL_GATE_MODEL_PATH`, `BICYCLE_RIDE_TIMES_PATH`, `ETA_SPATIAL_BICYCLE_MODEL_PATH`, `ETA_HGB_MODEL_PATH`, `ETA_PUBLIC_BICYCLE_SHADOW_DIRECTORY` | 읽기 전용 파일/폴더 경로 또는 빈 값                                                                                                                             |
 | 모델 자동 갱신                | `MODEL_MANIFEST_PATH`, `MODEL_MANIFEST_POLL_SECONDS`, `MODEL_REFRESH_STATUS_PATH`, `MODEL_REFRESH_SCHEDULE_KST`                                                                                                                   | 갱신 Job의 버킷 manifest 경로(`/models/manifest.json`)와 확인 주기. 설정하면 아래 모델 경로 대신 manifest를 따르고 재시작 없이 바뀝니다. 빈 값은 아래 고정 경로 |
+| NGII 지도                     | `MAP_NGII_PMTILES_PATH`                                                                                                                                                                                                           |
 
 ### 시연용 가상 킥보드·전기자전거
 
@@ -103,6 +104,17 @@ npm run env:deployment
 - 시뮬레이터를 켜면 `deploy/cloud-run.ps1`이 `--min-instances 1`(직접 지정은 `-MinInstances`)과 `/api/health/ready` startup probe(5초 간격, 최대 300초)를 붙입니다. probe는 시뮬레이터를 꺼도 붙습니다. 상시 1대 비용은 하루 약 3~4달러로 추정합니다(미검증). 창 저장 버킷이 없으면 새 인스턴스마다 창을 직접 계산하므로 심사 기간에는 `MaxInstances = 2` 이하를 권장합니다.
 - 켜면 지도 이동수단 조회에 `시연용 가상 킥보드`·`시연용 가상 전기자전거` 표시가 붙은 차량이 나오고, 경로 검색은 이 차량으로 킥보드·전기자전거 구간을 만들 수 있습니다(가상 요금: 킥보드 잠금 해제 1,000원·분당 150원, 전기자전거 잠금 해제 600원(00~06시 1,000원)·분당 160원, 잠금 해제 30초·반납 45초). 경로 구간에는 `simulated: true` 출처가 붙습니다.
 - 읽기 전용 조회(공개 요청 한도 적용): `GET /api/sim/status`(상태별 대수, 오늘 집계, 작업조, 차종별 `byType`), `GET /api/sim/events`(`since` 또는 `cursor`, `limit` 1~500, `types`, `vehicleTypes`=`kick-scooter`·`e-bike`, `lat`·`lon`·`radius`. 차량이 있는 사건에는 `vehicleType`), `GET /api/sim/crews`(작업조·거점·보관소, 차종별 적재·재고), `GET /api/sim/gbfs/gbfs.json`, `system_information.json`, `vehicle_types.json`(`sim-kick-scooter`, `sim-e-bike`), `vehicle_status.json`(선택: `lat`, `lon`, `radius`. 조건이 없으면 거리의 차량 전부, 봉투에 `total`·`truncated`). GBFS v3.0 형식을 따르지만 실제 운영사 피드가 아닙니다. 요청 한도는 `/api/sim/*` 경로마다 따로 분당 60회입니다(mvp 서버도 같음). 금액·범칙금·견인은 모두 가정값이며 실제 법령·조례 금액과 다를 수 있습니다.
+
+### NGII 1:1,000 지도
+
+`seoul-ngii-v1.pmtiles`(국토지리정보원 수치지형도)는 국외 반출 금지 자료라 **API 서버를 거쳐서만** 제공합니다. 공개 버킷, 다른 리전, CDN에는 두지 않습니다.
+
+- 서울 리전 비공개 버킷(`--public-access-prevention`, 런타임 서비스 계정만 `roles/storage.objectViewer`)에 올리고, `deploy/cloud-run.ps1 -MapBucket <버킷>`으로 읽기 전용 `/maps`에 붙입니다. 이때 `MAP_NGII_PMTILES_PATH`는 정확히 `/maps/seoul-ngii-v1.pmtiles`여야 합니다. 둘 중 하나만 있거나 `-Region`이 `asia-northeast3`가 아니면 스크립트가 멈춥니다.
+- `GET`/`HEAD /api/maps/seoul-ngii-v1.pmtiles`는 Range 요청 하나만 받습니다. 한 번에 512 KiB까지이고, Range가 없거나 여러 구간이거나 더 크면 400, 파일 끝을 넘으면 416(`Content-Range: bytes */크기`)입니다. 끝이 열린 Range(`bytes=N-`)는 512 KiB로 잘라 줍니다. Range 없는 `HEAD`는 크기만 알려 주고 본문이 없습니다. 파일 전체를 한 번에 주는 응답은 없습니다.
+- 응답은 `Cache-Control: private, max-age=300`, 크기와 수정 시각으로 만든 강한 `ETag`를 붙입니다. IP마다 분당 600회 제한(PostgreSQL 공유)입니다.
+- 브라우저 출처는 `CORS_ORIGINS`와 앱 지도 프레임의 `Origin: null`만 받고 쿠키는 받지 않습니다.
+- 변수가 비어 있으면 404(`MAP_NOT_CONFIGURED`), 파일을 읽지 못하면 503(`MAP_UNAVAILABLE`)이고 서버는 그대로 시작합니다. `GET /api/health`의 `maps.ngii`가 `configured`, `available`을 알려 줍니다(경로는 보이지 않습니다).
+- 앱 빌드는 `EXPO_PUBLIC_MAP_NGII_TILES_URL=https://<API 도메인>/api/maps/seoul-ngii-v1.pmtiles`를 씁니다. 출처 표기 `© 국토지리정보원 수치지형도`는 앱에 있습니다.
 
 `AUTH_DATABASE_PATH`, `ETA_OBSERVATION_DATABASE_PATH`, `ETA_CONTEXT_MODEL_PATH`, `ETA_JOURNEY_MODEL_PATH`는 폐기되었습니다. 해당 데이터는 Cloud SQL을 사용합니다. 기존 SQLite 데이터/JSON 모델 파일이 자동 이관된 것으로 간주하지 말고 실제 데이터 이관 계획을 세웁니다.
 
@@ -133,6 +145,7 @@ $deployment = @{
   MaxInstances = 10  # 시뮬레이터를 켜고 창 저장 버킷이 없으면 2 이하 권장
   MinInstances = -1  # 자동: 시뮬레이터를 켜면 1, 아니면 0
   SimulationWindowBucket = 'your-project-id-sim-windows'  # 시뮬레이터 창 저장소(서울 리전). 빈 값이면 볼륨 없음
+  MapBucket = 'your-project-id-ngii-kr'  # NGII 지도 비공개 버킷(서울 리전), 읽기 전용 /maps. 빈 값이면 NGII 지도 없음
   AllowUnauthenticated = $true
 }
 .\deploy\cloud-run.ps1 @deployment -PlanOnly
@@ -153,6 +166,7 @@ $deployment = @{
 - 공개 FOSSGIS 보행 서버의 제한은 인스턴스 전체에서 공유되지 않습니다. 여러 Cloud Run 인스턴스를 운영하면 자체 OSRM endpoint와 적절한 호출량 제한을 사용합니다.
 - 시뮬레이터를 켰다면 두 번째 배포 뒤 `GET /api/health`의 `simulation.source`가 `store`인지(저장된 창을 읽었는지), `simulation.windowStore`가 `configured`인지 확인합니다. 창 저장 버킷의 위치가 `ASIA-NORTHEAST3`인지도 확인합니다.
 - 운영 모델(버스·지하철·따릉이)과 공휴일 달력은 직접 올리지 않고 자동 갱신 Job이 서울 버킷에 쓰며 서비스는 그 버킷을 읽기 전용 `/models`로 붙여 manifest를 따릅니다. 만들기·배포·경보·롤백은 `docs/MODEL-REFRESH.md`, 배포 스크립트는 `deploy/model-refresh-job.sh`(기본은 계획 출력만), 서비스에 붙이는 인자는 `cloud-run.ps1 -ModelBucket`입니다. 확인은 `GET /api/health`의 `modelRefresh.status`(`ok`가 정상)입니다.
+- 갱신 Job의 코드와 이미지는 이 저장소의 `model-refresh/`에 있습니다(Node + Python 이미지, `docker build -f model-refresh/Dockerfile .`). API 이미지(`./Dockerfile`)와 빌드(`npm run build`)는 `model-refresh/`를 포함하지 않고, API 이미지에는 Python이 없습니다. `main` 푸시로 API를 배포하는 트리거에는 `ignoredFiles: model-refresh/**`를 두고, Job 이미지는 `model-refresh/cloudbuild.trigger.yaml`을 쓰는 별도 트리거로 만듭니다(포함 파일 목록은 `docs/MODEL-REFRESH.md` "이미지 자동 빌드"). Job 테스트는 `npm run test:model-refresh`, 타입 검사는 `npm run typecheck:model-refresh`입니다(Python `numpy`·`scikit-learn` 필요).
 - 외부 검증 모델을 쓰려면 검증된 파일을 컨테이너/읽기 전용 볼륨에 별도 제공하고 해당 절대 경로를 설정합니다. 기본 이미지는 임의 모델을 포함하지 않습니다. 학습 관측값과 contextual/journey 모델의 정상 저장 위치는 PostgreSQL입니다.
 
 ## 시작 실패 진단

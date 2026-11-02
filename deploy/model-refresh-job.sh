@@ -2,8 +2,11 @@
 # One-time setup of the production model refresh: bucket, service accounts, secret, image, Cloud Run Job,
 # Cloud Scheduler trigger, alerts. Everything in Seoul (asia-northeast3).
 #
-#   bash jigak-backend/deploy/model-refresh-job.sh --project P              # PLAN: prints the commands, calls nothing
-#   bash jigak-backend/deploy/model-refresh-job.sh --project P --apply       # runs them (asks nothing more: read the plan first)
+#   bash deploy/model-refresh-job.sh --project P              # PLAN: prints the commands, calls nothing
+#   bash deploy/model-refresh-job.sh --project P --apply       # runs them (asks nothing more: read the plan first)
+# (from the backend repository root; in the monorepo the same file is jigak-backend/deploy/model-refresh-job.sh)
+# The job image is built from this repository alone (model-refresh/Dockerfile). Only step 8 (seeding the bucket) needs
+# the untracked operating models: run it in the monorepo, or pass --bundle with a folder made there by models:store:bundle.
 #
 # Without --apply this script never calls gcloud (it works on a machine that has no gcloud). With --apply
 # every create step first checks whether the resource exists, so a second run only fills in what is missing.
@@ -13,7 +16,7 @@ set -euo pipefail
 PROJECT=""; BUCKET=""; REGION="asia-northeast3"; SERVICE="jigakmap-api"; RUNTIME_SA=""
 JOB="jigak-model-refresh"; JOB_SA_NAME="jigak-model-refresh"; SCHED_SA_NAME="jigak-refresh-scheduler"
 REPO="jigak"; IMAGE_TAG="$(date +%Y%m%d-%H%M)"; SECRET="data-go-kr-service-key"; SECRET_VERSION="1"
-ALERT_EMAIL=""; API_HOST=""; SCHEDULE="30 5,9,13 * * *"; APPLY=0; FROM_STEP=1
+ALERT_EMAIL=""; API_HOST=""; SCHEDULE="30 5,9,13 * * *"; APPLY=0; FROM_STEP=1; BUNDLE_DIR=""
 CPU="8"; MEMORY="32Gi"; TASK_TIMEOUT="3h"; MAX_RETRIES="1"
 
 usage() { sed -n '2,13p' "$0"; cat <<'EOF'
@@ -27,6 +30,7 @@ Options
   --secret-version N     version of secret data-go-kr-service-key to pin (default 1)
   --alert-email ADDR     create an email channel and the alert policies (skipped when empty)
   --api-host HOST        API host name for the health uptime check (e.g. api.example.com); skipped when empty
+  --bundle DIR           step 8: an existing bootstrap folder (npm run models:store:bundle -- --out DIR, made in the monorepo)
   --from-step N          start at step N (resume after a failure)
   --apply                actually run the commands
 EOF
@@ -42,6 +46,7 @@ while [ $# -gt 0 ]; do
     --secret-version) SECRET_VERSION="$2"; shift 2 ;;
     --alert-email) ALERT_EMAIL="$2"; shift 2 ;;
     --api-host) API_HOST="$2"; shift 2 ;;
+    --bundle) BUNDLE_DIR="$2"; shift 2 ;;
     --from-step) FROM_STEP="$2"; shift 2 ;;
     --apply) APPLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -54,7 +59,8 @@ done
 [[ "$BUCKET" =~ ^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$ ]] || { echo "invalid bucket name: $BUCKET" >&2; exit 2; }
 [[ "$SECRET_VERSION" =~ ^[1-9][0-9]*$ ]] || { echo "--secret-version must be a number" >&2; exit 2; }
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# The backend repository root (jigak-backend/ in the monorepo): model-refresh/ and deploy/ live here.
+BACKEND="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 JOB_SA="${JOB_SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
 SCHED_SA="${SCHED_SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/jigak-model-refresh:${IMAGE_TAG}"
@@ -95,7 +101,8 @@ ensure "${GC[*]} artifacts repositories describe $REPO --location $REGION" \
   --description "jigak images"
 
 step "models bucket in Seoul: uniform access, versioning, lifecycle (old versions 14 days, raw/ 21 days)"
-LIFECYCLE="$(mktemp -t jigak-lifecycle)"
+# Explicit XXXXXX template: GNU mktemp (Linux, Cloud Shell, WSL) rejects `-t name` without X's; macOS accepts both.
+LIFECYCLE="$(mktemp "${TMPDIR:-/tmp}/jigak-lifecycle.XXXXXX")"
 trap 'rm -f "$LIFECYCLE"' EXIT
 cat > "$LIFECYCLE" <<'JSON'
 {"rule":[
@@ -137,14 +144,10 @@ if [ "$APPLY" = 1 ] && ! skip; then
     || { echo "secret $SECRET has no version $SECRET_VERSION yet: add it (line above), then rerun with --from-step $((STEP + 1))" >&2; exit 1; }
 fi
 
-step "build and push the image (staged context, Cloud Build in Seoul)"
-STAGE="${TMPDIR:-/tmp}/jigak-refresh-context"
-if ! skip; then
-  show rm -rf "$STAGE"
-  show bash "$ROOT/cloud-jobs/model-refresh/stage-context.sh" "$STAGE"
-  if [ "$APPLY" = 1 ]; then rm -rf "$STAGE"; bash "$ROOT/cloud-jobs/model-refresh/stage-context.sh" "$STAGE"; fi
-fi
-run "${GC[@]}" builds submit "$STAGE" --region "$REGION" --config "$STAGE/cloud-jobs/model-refresh/cloudbuild.yaml" \
+step "build and push the image (backend repository as the context, Cloud Build in Seoul)"
+# .gcloudignore keeps node_modules, dist, .env and local data out of the upload; model-refresh/Dockerfile.dockerignore
+# keeps the build context to the job's files. Later images come from the push trigger (model-refresh/cloudbuild.trigger.yaml).
+run "${GC[@]}" builds submit "$BACKEND" --region "$REGION" --config "$BACKEND/model-refresh/cloudbuild.yaml" \
   --substitutions "_IMAGE=$IMAGE"
 
 step "Cloud Run Job (Seoul): ${CPU} vCPU / ${MEMORY}, task timeout ${TASK_TIMEOUT}, 1 retry, 1 task"
@@ -159,22 +162,40 @@ run "${GC[@]}" run jobs deploy "$JOB" --region "$REGION" --image "$IMAGE" \
   --add-volume-mount "volume=models,mount-path=/models-store"
 
 step "seed the bucket: first manifest generation from the current operating models (bundle uploaded, then initialised by one Job run)"
-BUNDLE="${TMPDIR:-/tmp}/jigak-store-bootstrap"
-echo "# refuses to overwrite: skipped when gs://$BUCKET/manifest.json already exists"
+# The bundle (operating models, journals, calendars, the 따릉이 seed, fixed inputs, incumbent references) is made from the
+# monorepo's untracked files: models:store:bundle finds cloud-models/ and mvp/data/ two levels above model-refresh/.
+BUNDLE="${BUNDLE_DIR:-${TMPDIR:-/tmp}/jigak-store-bootstrap}"
+echo "# refuses to overwrite: when gs://$BUCKET/manifest.json already exists only the incumbent references are added (no-clobber)"
+# Returns 1 (does not exit) when there is nothing to make the bundle from: the caller decides whether that is fatal.
+make_bundle() {
+  if [ -n "$BUNDLE_DIR" ]; then
+    [ -d "$BUNDLE_DIR/operational" ] || { echo "--bundle $BUNDLE_DIR has no operational/ folder" >&2; return 1; }
+  else
+    [ -d "$BACKEND/../mvp" ] || { echo "no monorepo next to $BACKEND: make the bundle there (npm --prefix jigak-backend run models:store:bundle -- --out DIR) and pass --bundle DIR" >&2; return 1; }
+    rm -rf "$BUNDLE"; npm --prefix "$BACKEND" run models:store:bundle -- --out "$BUNDLE" || return 1
+  fi
+}
 if ! skip; then
-  show npm --prefix "$ROOT/mvp" run models:store:bundle -- --out "$BUNDLE"
+  [ -n "$BUNDLE_DIR" ] || show npm --prefix "$BACKEND" run models:store:bundle -- --out "$BUNDLE"
   show "${GC[@]}" storage rsync --recursive "$BUNDLE" "gs://$BUCKET/bootstrap"
   show "${GC[@]}" run jobs execute "$JOB" --region "$REGION" --args=init,--from-bundle,/models-store/bootstrap --wait
+  echo "# (bucket already seeded instead:)"
+  show "${GC[@]}" storage cp --recursive --no-clobber "$BUNDLE/references" "gs://$BUCKET/"
   if [ "$APPLY" = 1 ]; then
     if "${GC[@]}" storage ls "gs://$BUCKET/manifest.json" >/dev/null 2>&1; then
-      echo "manifest.json already exists in the bucket: not seeding again" >&2
+      echo "manifest.json already exists in the bucket: not seeding again; adding the incumbent references it lacks" >&2
+      # A second run from a backend-only clone has no bundle source: warn and go on with the later steps.
+      if make_bundle; then
+        if [ -d "$BUNDLE/references" ]; then "${GC[@]}" storage cp --recursive --no-clobber "$BUNDLE/references" "gs://$BUCKET/"; fi
+      else
+        echo "WARNING: skipped adding incumbent references (no --bundle and no monorepo); the seeded bucket is left as it is" >&2
+      fi
     else
-      rm -rf "$BUNDLE"
-      npm --prefix "$ROOT/mvp" run models:store:bundle -- --out "$BUNDLE"
+      make_bundle || exit 1
       "${GC[@]}" storage rsync --recursive "$BUNDLE" "gs://$BUCKET/bootstrap"
       "${GC[@]}" run jobs execute "$JOB" --region "$REGION" --args=init,--from-bundle,/models-store/bootstrap --wait
-      rm -rf "$BUNDLE"
     fi
+    [ -n "$BUNDLE_DIR" ] || rm -rf "$BUNDLE"
   fi
 fi
 
@@ -191,11 +212,11 @@ run "${GC[@]}" run jobs execute "$JOB" --region "$REGION" --args=--plan --wait
 step "API service: mount the bucket read-only and follow the manifest (no restart needed afterwards)"
 echo "# cloud-run.env.yaml needs MODEL_MANIFEST_PATH: '/models/manifest.json'; leave the ETA_*_PATH values empty (they stay as fallback)."
 echo "# Run from PowerShell, with your usual arguments of cloud-run.ps1 plus -ModelBucket:"
-echo "#   pwsh jigak-backend/deploy/cloud-run.ps1 -ProjectId $PROJECT ... -ModelBucket $BUCKET"
+echo "#   pwsh $BACKEND/deploy/cloud-run.ps1 -ProjectId $PROJECT ... -ModelBucket $BUCKET"
 
 step "alerts: failed or at-risk refresh, and an uptime check on /api/health"
 if [ -n "$ALERT_EMAIL" ]; then
-  MON="$ROOT/cloud-jobs/model-refresh/monitoring"
+  MON="$BACKEND/model-refresh/monitoring"
   CHANNEL_FILE="${TMPDIR:-/tmp}/jigak-channel.txt"
   # The notification channel and policies need the alpha/beta monitoring commands; check `gcloud components list` first.
   if ! skip; then
@@ -212,19 +233,19 @@ if [ -n "$ALERT_EMAIL" ]; then
     fi
   fi
 else
-  echo "# --alert-email not given: alert policies skipped. Policy files: cloud-jobs/model-refresh/monitoring/"
+  echo "# --alert-email not given: alert policies skipped. Policy files: model-refresh/monitoring/"
 fi
 if [ -n "$API_HOST" ]; then
   echo "# uptime check (needs the API reachable without sign-in at /api/health; the API deploys with --no-allow-unauthenticated by default)"
   if ! skip; then
     if [ "$APPLY" = 1 ]; then
-      sed "s|__PROJECT__|$PROJECT|;s|__API_HOST__|$API_HOST|" "$ROOT/cloud-jobs/model-refresh/monitoring/uptime-check-model-health.json" > "${TMPDIR:-/tmp}/jigak-uptime.json"
+      sed "s|__PROJECT__|$PROJECT|;s|__API_HOST__|$API_HOST|" "$BACKEND/model-refresh/monitoring/uptime-check-model-health.json" > "${TMPDIR:-/tmp}/jigak-uptime.json"
     fi
     echo "# no verified gcloud command for uptime checks: create it in the console (Monitoring > Uptime checks) with the values in ${TMPDIR:-/tmp}/jigak-uptime.json"
   fi
 else
-  echo "# --api-host not given: uptime check skipped (file: cloud-jobs/model-refresh/monitoring/uptime-check-model-health.json)"
+  echo "# --api-host not given: uptime check skipped (file: model-refresh/monitoring/uptime-check-model-health.json)"
 fi
 
 echo
-echo "# done. Next: docs 'Before the first run' in jigak-backend/docs/MODEL-REFRESH.md (verify list)."
+echo "# done. Next: docs 'Before the first run' in docs/MODEL-REFRESH.md (verify list), and the push trigger there."

@@ -122,8 +122,8 @@ function legacyHash(data: WindowData) {
 
 test('with no e-bikes the window is byte-identical to the scooter-only simulator', () => {
   for (const [date, expected] of [
-    ['2026-11-03', 'db01ea4edf63f5cd'],
-    ['2026-11-05', '411a9faa1de102ff'],
+    ['2026-11-03', 'f24dc191e687a77e'],
+    ['2026-11-05', '73baeccd6b92eff9'],
   ] as const) {
     assert.equal(legacyHash(buildWindowSync(request(date, 6_000, 0), demand, rules)), expected);
     const { fleets: _fleets, ...legacy } = request(date, 6_000, 0);

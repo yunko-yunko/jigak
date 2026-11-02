@@ -6,6 +6,7 @@ import {
   DOCKLESS_PROFILES,
   docklessConnection,
   docklessEnabled,
+  docklessRoutingIsFree,
   type DocklessMode,
   type ScooterConnectionContext,
 } from './scooter-bridge.js';
@@ -17,6 +18,8 @@ import {
   screenBicycleStationPairs,
   spanKey,
   MAX_SCREENED_SPANS,
+  cappedBicycleConnection,
+  cappedBicycleStationPairs,
   multimodalRoutes,
   multimodalTitle,
   taxiConnection,
@@ -1156,6 +1159,9 @@ export async function buildMixedModeBridges(
         : [],
     ),
   );
+  // The whole trip on self-hosted networks spends no call: a closed optional-stage window or a spent budget must not
+  // leave a kind without the one ride riders compare against (its tab would show only mixtures).
+  const docklessFree = docklessRoutingIsFree(context.provider);
   /**
    * A dockless rental between a pair's anchors. A continuation rides to (or starts from) the legal
    * spot for its kind by the station's street entrance that the operator names, and the transit
@@ -1164,7 +1170,14 @@ export async function buildMixedModeBridges(
    */
   const docklessJob = (mode: DocklessMode, pair: BridgePair, index: number): RentalJob | null => {
     if (!pair.continuation)
-      return { mode, pair, from: pair.from, to: pair.to, requiredCalls: () => 1, index };
+      return {
+        mode,
+        pair,
+        from: pair.from,
+        to: pair.to,
+        requiredCalls: () => (pair.direct && docklessFree ? 0 : 1),
+        index,
+      };
     const policy = DOCKLESS_PROFILES[mode].policy(context);
     if (!rentalPairUsable(pair, mode) || !policy?.returnPoint) return null;
     const first = pair.continuation === 'first';
@@ -1711,7 +1724,7 @@ export async function buildMixedModeBridges(
         !job ||
         blockedModes.has(mode) ||
         !rentalHasRoom(job) ||
-        context.budget.remaining - carReserved < job.requiredCalls()
+        (job.requiredCalls() > 0 && context.budget.remaining - carReserved < job.requiredCalls())
       )
         continue;
       const effects: (() => void)[] = [];
@@ -1752,7 +1765,8 @@ export async function buildMixedModeBridges(
         context.budget.remaining - carReserved < job.requiredCalls() + pendingRoadCalls()
       )
         await settleRoads();
-      if (context.budget.remaining - carReserved < job.requiredCalls()) {
+      // A job that spends no call (a self-hosted network, a remembered answer) needs no room in the budget.
+      if (job.requiredCalls() > 0 && context.budget.remaining - carReserved < job.requiredCalls()) {
         markBudgetSkipped(logicalKey);
         continue;
       }
@@ -1961,6 +1975,88 @@ export async function buildMixedModeBridges(
         });
       void batch.task.catch(() => undefined);
       roadBatches.push(batch);
+    }
+  }
+  // Within the rider's 따릉이 cap as the crow flies, the whole trip can ride past the cap on the bicycle network (a river
+  // crossing). Then no ride reaches the destination: return at a dock short of it, within the cap, and walk the rest, so
+  // the 따릉이 tab keeps a route that rides 따릉이 alone. On self-hosted networks this costs no call.
+  const wholeBicycle = jobs.bicycle.find((job) => job.pair.direct && job.stations);
+  if (
+    wholeBicycle &&
+    !successfulRentalPairs.bicycle.has(wholeTrip) &&
+    // Only the ride this search already has (or a free network) is read again: an unanswered ride is no evidence.
+    routeQueryIsReusable(
+      context.provider,
+      'bicycle',
+      {
+        origin: place(wholeBicycle.stations!.hire),
+        destination: place(wholeBicycle.stations!.drop),
+      },
+      context.budget,
+    ) &&
+    !blockedModes.has('bicycle') &&
+    !blockedModes.has('walk')
+  ) {
+    const cappedKey = `bicycle:${wholeTrip}:capped`;
+    const returns =
+      (await guarded(
+        'bicycle',
+        () =>
+          cappedBicycleStationPairs(
+            context,
+            request.preferences,
+            wholeBicycle.stations!,
+            request.destination,
+          ),
+        'routing',
+        cappedKey,
+      )) ?? [];
+    for (const [alternative, stations] of returns.entries()) {
+      const hire = place(stations.hire),
+        drop = place(stations.drop);
+      const calls =
+        queryCost('bicycle', hire, drop) +
+        (metersBetween(request.origin, hire) >= 1
+          ? queryCost('walking', request.origin, hire)
+          : 0) +
+        queryCost('walking', drop, request.destination);
+      if (calls > 0 && context.budget.remaining - carReserved < calls) {
+        markBudgetSkipped(cappedKey);
+        break;
+      }
+      diagnostics.rentalAttempts++;
+      const prefix = `graph-bicycle-capped-${alternative}`;
+      const segments = await context.budget.withReservedCalls(carReserved, () =>
+        guarded(
+          'bicycle',
+          () =>
+            cappedBicycleConnection(
+              context,
+              request.preferences,
+              request.origin,
+              request.destination,
+              prefix,
+              stations,
+            ),
+          'routing',
+          cappedKey,
+        ),
+      );
+      if (!segments?.length) {
+        diagnostics.unavailableRentals++;
+        continue;
+      }
+      diagnostics.rentalConnections++;
+      bridges.push(
+        totals({
+          id: `${prefix}-bridge`,
+          title: multimodalTitle(segments),
+          segments,
+          transfers: 0,
+          notes: bicycleNotes(segments, context.now),
+        }),
+      );
+      break;
     }
   }
   // Everything below reads what the road lookups found (their pairs, failures and blocked modes), as before.

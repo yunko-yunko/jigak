@@ -13,6 +13,7 @@ import type {
   ParkingAccess,
   Place,
   Risk,
+  SubwayTimetable,
 } from '../shared/domain/types.js';
 import {
   evaluateBaseTimeline,
@@ -27,7 +28,7 @@ import {
 import { validLiveVehicles } from '../shared/domain/vehicleConstraints.js';
 import { metersBetween, stationBaseName } from './realtime/names.js';
 import { MAX_CONNECTOR_METERS } from './connectivity/walking-comparison.js';
-import { expectedWaitSeconds, stationAccessStep } from './transit-enrichment.js';
+import { expectedWaitSeconds, stationGateStep } from './transit-enrichment.js';
 import { headwayServiceEnded, waitChangeTimes } from '../shared/domain/waitEstimates.js';
 import { taxiPickupSeconds } from './multimodal.js';
 import type { WeatherSnapshot } from '../shared/intelligence/types.js';
@@ -56,7 +57,6 @@ import {
   continuesRide,
   firstRideSegment,
   lastRideSegment,
-  rideGroups,
   rideKey,
 } from './ride-identity.js';
 
@@ -73,10 +73,11 @@ export interface JourneyGraphOptions {
   maxJourneySeconds?: number;
   /** Default true: one result per ride key, so result slots hold distinct rides. False keeps every path variant (frontier audits). */
   distinctRides?: boolean;
-  /** Default true: rank by arrival plus the cost of extra vehicle uses, and never plan a ride shorter than walking, a run to a
-   * rule-timed boarding, a boarding after a taxi or a second rental. False is the plain fastest-arrival search (audits). */
+  /** Default true: never plan a ride that walking its stretch nearly matches, a run to a rule-timed boarding, or a vehicle use
+   * that walking would beat (WALK_DOMINANCE_SLACK_SECONDS). Ranking is the arrival either way; false drops these walk-only
+   * comparisons for the plain fastest-arrival search (audits, toy geometry). */
   rankingCosts?: boolean;
-  /** Reserve a results tab's best route from the already fetched paths without changing their costs. */ requiredMode?: TabMode;
+  /** Reserve a results tab's best route from the already fetched paths without changing their arrivals. */ requiredMode?: TabMode;
   /** Reserve a results tab's best pure route: like `requiredMode`, and no other vehicle (bus, train, taxi, car, rental) is
    * used anywhere on the journey; walking, running, gates and waits are free. */
   pureMode?: TabMode;
@@ -119,6 +120,9 @@ export interface JourneyGraphDiagnostics {
   shortRides: number;
   /** Expansions refused because a run leads to a boarding timed only by a rule (average headway or taxi dispatch). */
   runsBeforeRuleWaits: number;
+  /** Vehicle uses refused because walking would do better (WALK_DOMINANCE_SLACK_SECONDS): the vehicles so far reach this point
+   * later than a walk from the origin, or the journey already stood where a walk to the destination arrives sooner. */
+  walkableDetours: number;
 }
 export interface JourneyGraphResult {
   routes: BaseRoute[];
@@ -166,14 +170,14 @@ interface Label {
   notes: Risk[];
   /** Provider itineraries of the arc that held the last vehicle boarded. */
   rideSources?: ReadonlySet<string>;
-  /** Ranking-only seconds of the vehicle uses so far (rankingPenaltySeconds), never part of a clock. */
-  penalty: number;
   /** Vehicle uses so far: boardings (a continued ride counts once) and rentals. */
   uses: number;
   /** The run that brought the rider to this street point, while nothing else followed it. */
   trailingRun?: Stretch;
   /** The street stretch now being covered by vehicles (from the street point the rider left on foot or by gates). */
   riding?: Stretch;
+  /** The earliest arrival of walking to the destination from a point this journey reached after a vehicle use. */
+  homeBy: number;
   discarded?: boolean;
 }
 /** Where a stretch began, on the point-estimate and latest clocks, and the metres covered on it so far. */
@@ -218,37 +222,27 @@ const VEHICLE_MODES: readonly BaseSegment['mode'][] = [
   'car',
 ];
 /**
- * Ranking-only costs of a journey's extra vehicle uses; a shown time or clock never includes them. These are assumptions:
- * Naver does not publish what one transfer is worth. Each boarding after the journey's first vehicle use costs
- * BOARDING_PENALTY_SECONDS, and a rental after one costs RENTAL_PENALTY_SECONDS (another vehicle to find, unlock and park).
- * A combination must therefore win by more than its extra legs; a taxi, a second rental or a boarding after a taxi is
- * priced the same way, never removed outright, so the fastest journey still wins whenever it is that much faster.
+ * Extra vehicle uses carry no ranking cost (user decision D1, 2026-11-02): the recommended route and each tab's route are
+ * the earliest arrival. A second rental or a boarding after a taxi is neither refused nor priced; it is chosen exactly when
+ * it arrives sooner. Its real handling time is already on the clock (hire and return legs, waits, boarding margins).
  */
-export const BOARDING_PENALTY_SECONDS = 120,
-  RENTAL_PENALTY_SECONDS = 150;
 /** A bus or train hop (at most SHORT_HOP_METERS in a straight line, about a 15-minute walk) must save at least
  * MIN_RIDE_SAVING_SECONDS over walking the same street stretch; both are assumptions. A longer stretch is no hop a
  * rider would walk instead (a first train after a long wait), so the walking estimate never removes it. */
 export const MIN_RIDE_SAVING_SECONDS = 120,
   SHORT_HOP_METERS = 1000;
+/** A vehicle use is refused when walking does better by more than this (an assumption: walking estimates are taken at the
+ * search clock, so a minute absorbs their drift at the later clock the rider walks). Two cases, both over fetched walks and
+ * station gates only: the vehicles so far reach a point later than a walk from the origin would (a loop near the start, e.g.
+ * 잠실역→강남역 "따릉이 → 2호선" riding away and walking back to 잠실역), or the journey already stood where a walk to the
+ * destination arrives sooner than any continuation by vehicle (a loop past the end, e.g. "2호선 → 따릉이" alighting at 강남역,
+ * walking on to 역삼역 and riding back). Walking itself is never refused, so the walk it is compared with stays a result. */
+export const WALK_DOMINANCE_SLACK_SECONDS = 60;
 /** Seconds a ride over the stretch from `from` to `to` saves over the fetched walk of that stretch; Infinity when it is no
  * short hop. The walk is the fetched network's own time, not an assumed pace: where the street walk is long (a rail line or
  * an elevated road between the stops) the ride saves what it really saves. */
 const hopSavingSeconds = (from: Place, to: Place, walkSeconds: number, rideSeconds: number) =>
   metersBetween(from, to) > SHORT_HOP_METERS ? Infinity : walkSeconds - rideSeconds;
-
-/** Ranking cost of a route's vehicle uses in boarding order: the first is free, each later one is priced as above. */
-export function rankingPenaltySeconds(segments: readonly BaseSegment[]): number {
-  const uses = [
-    ...rideGroups(segments)
-      .filter((group) => !RENTAL_RIDES.has(group[0].mode))
-      .map((group) => ({ at: segments.indexOf(group[0]), seconds: BOARDING_PENALTY_SECONDS })),
-    ...segments.flatMap((segment, index) =>
-      segment.mode === 'hire' ? [{ at: index, seconds: RENTAL_PENALTY_SECONDS }] : [],
-    ),
-  ].sort((a, b) => a.at - b.at);
-  return uses.slice(1).reduce((sum, use) => sum + use.seconds, 0);
-}
 
 /**
  * Signatures memoized for one search. Evaluated copies keep their source's polyline, stop list, feed, traffic, timetable
@@ -396,7 +390,6 @@ const continuationState = (label: Label) =>
     label.vehicleCount,
     label.segments.length,
     [...label.visited].sort(),
-    label.penalty,
     label.uses,
     stretchState(label.trailingRun),
     stretchState(label.riding),
@@ -656,19 +649,38 @@ function paidBoundaries(
   return { from: transfer || first?.mode === 'subway', to: transfer || last?.mode === 'subway' };
 }
 
+/** The shortest ride a published timetable lists. A timetabled train takes one of its rows' ride times, or, when the table
+ * cannot be used at that clock, the segment's own time like any other train, so the smaller of the two bounds its ride. */
+const shortestRows = new WeakMap<SubwayTimetable, number>();
+const shortestTimetabledRide = (table: SubwayTimetable) => {
+  let seconds = shortestRows.get(table);
+  if (seconds === undefined) {
+    seconds = Infinity;
+    for (const row of table.departures) {
+      const ride = (row.arrivalAt - row.departureAt) / 1000;
+      if (Number.isFinite(ride) && ride > 0 && ride < seconds) seconds = ride;
+    }
+    shortestRows.set(table, seconds);
+  }
+  return seconds;
+};
 /** h(n) and g(n) edge costs: an admissible elapsed time over fetched segments only. Replaceable waits cost zero.
- * A context model can shorten a segment below the provider's estimate, but never below its physical floor. */
+ * A context model can shorten a segment below the provider's estimate, but never below its physical floor. A timetabled
+ * train counts its shortest published ride; counting it as nothing (before 11-02) left the remaining-time bound so loose
+ * that a long search (강남역→광화문역) spent every expansion on walk and bus prefixes and found no route at all. */
 const arcLowerBoundSeconds = (arc: Arc, options: JourneyGraphOptions) =>
-  arc.segments.reduce(
-    (sum, segment) =>
+  arc.segments.reduce((sum, segment) => {
+    if (segment.mode === 'wait') return sum;
+    const seconds = options.contextualEta
+      ? physicalFloorSeconds(segment)
+      : restorePublicBusSource(segment).durationSeconds.min;
+    return (
       sum +
-      (segment.mode === 'wait' || (segment.mode === 'subway' && segment.timetable)
-        ? 0
-        : options.contextualEta
-          ? physicalFloorSeconds(segment)
-          : restorePublicBusSource(segment).durationSeconds.min),
-    0,
-  );
+      (segment.mode === 'subway' && segment.timetable
+        ? Math.min(seconds, shortestTimetabledRide(segment.timetable))
+        : seconds)
+    );
+  }, 0);
 /** Rider preferences that hold for an arc whatever history reaches it: the search never expands an arc that fails them. */
 const arcAllowed = (arc: Arc, request: BasePlanningRequest) =>
   arc.from !== arc.to &&
@@ -1005,7 +1017,8 @@ function compile(
     reaches = new Set(arcs.map((arc) => arc.to));
   for (const gate of gates) {
     if (gate.kind === 'exit' ? !leaves.has(gate.street) : !reaches.has(gate.street)) continue;
-    const step = stationAccessStep(
+    // A connection that starts or ends at the station point passes the nearest exit, named and timed (stationGateStep).
+    const step = stationGateStep(
       gate.ride,
       gate.kind,
       `${gate.source}-gate-${gate.kind}`,
@@ -1593,13 +1606,12 @@ export function planJourneyGraph(
   const costs = options.rankingCosts !== false;
   const elapsed = (label: Label) =>
     objective === 'estimated-arrival' ? label.estimated : label.max;
-  // The search ranks by the objective plus the ranking-only cost of the vehicle uses; clocks never include that cost.
-  const cost = (label: Label) => elapsed(label) + label.penalty;
+  // The search ranks by the objective alone: the arrival, never a cost added for a vehicle use.
   const routeElapsed = (route: BaseRoute) =>
-    (objective === 'estimated-arrival'
+    objective === 'estimated-arrival'
       ? ((estimateBaseTimeline(route.segments, request.now)?.arrivalAt ?? Infinity) - request.now) /
         1000
-      : route.durationSeconds.max) + (costs ? rankingPenaltySeconds(route.segments) : 0);
+      : route.durationSeconds.max;
   const diagnostics: JourneyGraphDiagnostics = {
     scope: 'bounded-fetched-network',
     searchMode: exact ? 'exact' : 'bounded',
@@ -1623,6 +1635,7 @@ export function planJourneyGraph(
     duplicateRideResults: 0,
     shortRides: 0,
     runsBeforeRuleWaits: 0,
+    walkableDetours: 0,
   };
   if (!fresh(options.receivedAt, request.now)) {
     diagnostics.complete = false;
@@ -1702,7 +1715,7 @@ export function planJourneyGraph(
   const remainingAfter = (node: string, used: boolean) =>
     (used ? remaining.used : remaining.unused).get(node) ?? Infinity;
   const lowerBound = (label: Label) =>
-    cost(label) + remainingAfter(label.node, label.requiredModeUsed || !options.requiredMode);
+    elapsed(label) + remainingAfter(label.node, label.requiredModeUsed || !options.requiredMode);
   const omit = (label: Label, reason: JourneyGraphLimit) => {
     limits.add(reason);
     diagnostics.omittedLabels++;
@@ -1754,6 +1767,37 @@ export function planJourneyGraph(
     }
     return reached.get(to) ?? null;
   };
+  // Walking dominance (ranking rule): the fewest seconds from the origin to each point over walks and station entries, and from
+  // each point to the destination over walks and station exits. A run, a ride or a rental never counts as walking.
+  const walkingArcs = arcs.filter(
+    (arc) =>
+      arc.resource === null &&
+      arc.segments.length > 0 &&
+      arc.segments.every((segment) => ['walk', 'entry', 'wait'].includes(segment.mode)),
+  );
+  const walkedFrom = (forward: boolean) => {
+    const edges = new Map<string, { to: string; seconds: number }[]>();
+    for (const arc of walkingArcs) {
+      // Leaving the paid area needs a ride first; entering it on the way to the destination is no walk there.
+      if (arc.gate && (forward ? arc.from.startsWith(PAID) : arc.to.startsWith(PAID))) continue;
+      const seconds = arc.segments.reduce(
+        (sum, segment) =>
+          sum +
+          (objective === 'estimated-arrival'
+            ? (estimatedSegmentSeconds(segment, request.now) ?? segment.durationSeconds.max)
+            : segment.durationSeconds.max),
+        0,
+      );
+      if (!Number.isFinite(seconds)) continue;
+      const [from, to] = forward ? [arc.from, arc.to] : [arc.to, arc.from];
+      const list = edges.get(from);
+      if (list) list.push({ to, seconds });
+      else edges.set(from, [{ to, seconds }]);
+    }
+    return shortestSeconds([forward ? origin : destination], edges);
+  };
+  const walkedFromOrigin = costs ? walkedFrom(true) : new Map<string, number>(),
+    walkedToDestination = costs ? walkedFrom(false) : new Map<string, number>();
   const requiredMode = options.requiredMode;
   // Node numbers and arcs toward the destination only, for the per-label reachability check below.
   const nodeNumber = new Map([...reachesDestination].map((node, index) => [node, index]));
@@ -1819,8 +1863,8 @@ export function planJourneyGraph(
     precedingWaitSeconds: 0,
     vehicleCount: 0,
     notes: [],
-    penalty: 0,
     uses: 0,
+    homeBy: Infinity,
   };
   const frontier = new Map<string, Label[]>();
   const routes: BaseRoute[] = [];
@@ -1907,8 +1951,7 @@ export function planJourneyGraph(
           const baseline = elapsed(label);
           scores.set(
             route,
-            (Number.isFinite(predicted) && predicted! >= baseline ? predicted! : baseline) +
-              label.penalty,
+            Number.isFinite(predicted) && predicted! >= baseline ? predicted! : baseline,
           );
           accepted.add(route);
           routes.push(route);
@@ -1961,7 +2004,7 @@ export function planJourneyGraph(
         diagnostics.sameRideReboards++;
         continue;
       }
-      // A second rental or a boarding after a taxi is priced (RENTAL_PENALTY_SECONDS, BOARDING_PENALTY_SECONDS) below, not refused.
+      // A second rental or a boarding after a taxi is neither refused nor priced: it wins exactly when it arrives sooner.
       const ride = firstRideSegment(arc.segments);
       // Returning a bike and hiring another without riding transit in between is one rental cut in two.
       if (
@@ -1973,20 +2016,23 @@ export function planJourneyGraph(
       )
         continue;
       if (!arcAllowed(arc, request)) continue;
-      // A new vehicle use (a continued ride is not one) after the journey's first adds its ranking cost.
+      const vehicleArc =
+        arc.resource !== null ||
+        arc.segments.some((segment) => VEHICLE_MODES.includes(segment.mode));
+      // The vehicles so far brought the rider here later than walking from the origin would have: walk here instead.
+      if (costs && vehicleArc && label.uses) {
+        const walked = walkedFromOrigin.get(label.node);
+        if (walked !== undefined && elapsed(label) > walked + WALK_DOMINANCE_SLACK_SECONDS) {
+          diagnostics.walkableDetours++;
+          continue;
+        }
+      }
+      // A new vehicle use (a continued ride is not one); the walk-dominance checks start after the first.
       const newUse = !!ride && !(lastRide && continuesRide(lastRide, ride));
-      const penalty =
-        label.penalty +
-        (costs && newUse && label.uses
-          ? arc.resource === 'rental'
-            ? RENTAL_PENALTY_SECONDS
-            : BOARDING_PENALTY_SECONDS
-          : 0);
       // The result bound only falls, and the loop stops before a label above it. A continuation already above it, even by the
       // arc's own lower bound, is never expanded or completed: skip timing it. Its bound still counts as unexplored.
       const ahead =
         elapsed(label) +
-        penalty +
         arcSeconds.get(arc)! +
         remainingAfter(
           arc.to,
@@ -2088,11 +2134,18 @@ export function planJourneyGraph(
         notes: [...label.notes, ...evaluated.notes],
         warnings:
           label.warnings + evaluated.notes.filter((note) => note.severity === 'warning').length,
-        penalty,
         uses: label.uses + Number(newUse),
         trailingRun,
         riding,
+        homeBy: label.homeBy,
       };
+      // A vehicle onward cannot beat walking to the destination from a point already reached: walk from there instead.
+      if (costs && vehicleArc && lowerBound(next) > label.homeBy + WALK_DOMINANCE_SLACK_SECONDS) {
+        diagnostics.walkableDetours++;
+        continue;
+      }
+      const home = next.uses ? walkedToDestination.get(next.node) : undefined;
+      if (home !== undefined) next.homeBy = Math.min(next.homeBy, elapsed(next) + home);
       if (
         next.bicycleMeters > request.preferences.maxBicycleMeters ||
         next.runningMeters > request.preferences.maxRunningMeters

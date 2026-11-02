@@ -11,6 +11,7 @@ import { HealthModule } from './modules/health/health.module.js';
 import { ModelsModule } from './modules/models/models.module.js';
 import { TravelTimesModule } from './modules/travel-times/travel-times.module.js';
 import { SimulationModule } from './modules/simulation/simulation.module.js';
+import { MapsModule } from './modules/maps/maps.module.js';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { SimulationModule } from './modules/simulation/simulation.module.js';
     ModelsModule,
     TravelTimesModule,
     SimulationModule,
+    MapsModule,
   ],
   providers: [RateLimitService],
 })

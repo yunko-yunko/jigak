@@ -199,7 +199,7 @@ const summary = (entry: [number, number] | undefined, prior: number, priorRows: 
     ? [(entry[0] * entry[1] + prior * priorRows) / (entry[1] + priorRows), Math.log1p(entry[1])]
     : [prior, 0];
 
-/** Features exactly as scripts/train-rail-gate.py builds them; null when a day type or station is unknown. */
+/** Features exactly as model-refresh/scripts/train-rail-gate.py builds them; null when a day type or station is unknown. */
 export function railGateFeatures(model: RailGateCheckpoint, input: RailGateInput): number[] | null {
   const { origin, destination, startedAt } = input;
   if (

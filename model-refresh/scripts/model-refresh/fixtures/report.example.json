@@ -1,0 +1,101 @@
+{
+  "runId": "20261102T0046-jsk2",
+  "mode": "local",
+  "plan": false,
+  "outcome": "promoted",
+  "exitCode": 0,
+  "startedAt": 1793547993302,
+  "finishedAt": 1793547993905,
+  "holidays": {
+    "calendars": {
+      "2026": {
+        "path": "calendars/korea-holidays-2026-e6bc310d4db6.json",
+        "sha256": "e6bc310d4db6b02730c43fa2ebd27c2f58b430414535463b3781c1b625ca7214",
+        "reviewAfter": "2026-12-02T00:46:25.214+09:00",
+        "verifiedAt": "2026-10-16T00:00:00+09:00",
+        "source": "unofficial-cross-check"
+      },
+      "2027": {
+        "path": "calendars/korea-holidays-2027-96a96c9b2ba9.json",
+        "sha256": "96a96c9b2ba9a9852889c7a21491047004975d9d493f01857ecc86d97fa53403",
+        "reviewAfter": "2026-11-28T00:00:00+09:00",
+        "verifiedAt": "2026-10-29T00:00:00+09:00",
+        "source": "carried"
+      }
+    },
+    "changed": false,
+    "written": [],
+    "years": {
+      "2026": {
+        "action": "unchanged",
+        "reviewAfter": "2026-12-02T00:46:25.214+09:00",
+        "source": "unofficial-cross-check",
+        "reason": "kasi-http-403-key-not-registered"
+      },
+      "2027": {
+        "action": "unchanged",
+        "reviewAfter": "2026-11-28T00:00:00+09:00",
+        "source": "carried",
+        "reason": "kasi-http-403-key-not-registered"
+      }
+    },
+    "alerts": [],
+    "notices": []
+  },
+  "taims": {
+    "latestPublished": null,
+    "downloaded": [],
+    "downloadBytes": 0,
+    "plannedDownloads": [],
+    "problems": [],
+    "pruned": []
+  },
+  "models": {
+    "bicycleRide": {
+      "due": true,
+      "action": "repromote",
+      "details": {
+        "due": true,
+        "reason": "requested",
+        "reviewAfter": 1796139985214,
+        "expiresAt": 1794668400000,
+        "remainingDays": 12.9676690625
+      },
+      "outcome": {
+        "status": "promoted",
+        "reason": "promoted",
+        "details": {
+          "sha256": "7719a54ddc051662c95e5385f4d729ed0641c3d1786f080f6ee0e0d7e7bb0f17",
+          "expiresAt": 1796139985214,
+          "generation": 3
+        }
+      }
+    },
+    "hgb": {
+      "due": false,
+      "action": "skipped:no-data",
+      "details": {
+        "note": "no trip records"
+      }
+    },
+    "contextual": {
+      "due": false,
+      "action": "skipped:no-data",
+      "details": {
+        "note": "retrained inside the server when consented trips arrive"
+      }
+    },
+    "journey": {
+      "due": false,
+      "action": "skipped:no-data",
+      "details": {
+        "note": "retrained inside the server when consented trips arrive"
+      }
+    }
+  },
+  "busGroup": null,
+  "alerts": [],
+  "notices": [],
+  "generationBefore": 2,
+  "generationAfter": 3
+}

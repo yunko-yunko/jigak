@@ -22,9 +22,12 @@ import type { RoutingObjective } from '../shared/domain/estimatedTiming.js';
 import { acquisitionTiming } from './acquisition-priority.js';
 import { stationAccessSeconds } from './connectivity/station-access.js';
 import {
+  bundledStationExits,
   chooseStationExit,
+  exitPassage,
   PASSAGE_ASSUMPTIONS,
   STATION_EXITS_VERSION,
+  stationExitsFor,
   type StationExitChoice,
   type StationExitTable,
 } from './connectivity/station-exits.js';
@@ -221,18 +224,91 @@ export function stationAccessStep(
   };
 }
 
+/** The street walk between an exit's sidewalk point and the station point a graph connection starts or ends at: the same
+ * 1.25 street detour at 1.2 m/s as an estimated walk (가정값). */
+const GATE_STREET_DETOUR = 1.25,
+  GATE_STREET_METERS_PER_SECOND = 1.2;
+
+/**
+ * The gate step the journey graph adds where a connection leaves or joins a train at the station's map point (a bridge or a
+ * fragment that starts or ends there instead of at an exit). It goes through the exit nearest that point by passage and street
+ * walk (bundled subway-exits-v1 table), so the step names the exit and counts the platform, the passage and the street walk
+ * from the exit's sidewalk point to the station point where the connection continues. The step stays on that station point
+ * at both ends, as the connection does; without exit data it is the plain platform step.
+ */
+export function stationGateStep(
+  ride: BaseSegment,
+  kind: 'entry' | 'exit',
+  id: string,
+  now: number,
+  source: StationExitTable | null = bundledStationExits(),
+): BaseSegment {
+  const point = kind === 'entry' ? ride.start : ride.end,
+    stop = kind === 'entry' ? firstStop(ride) : lastStop(ride);
+  const found = stationExitsFor(stop, point, source);
+  if (!found) return stationAccessStep(ride, kind, id, now);
+  const streetSeconds = (exit: { street: { latitude: number; longitude: number } }) =>
+    (metersBetween(exit.street, point) * GATE_STREET_DETOUR) / GATE_STREET_METERS_PER_SECOND;
+  const exit = found.exits
+    .map((candidate) => ({
+      candidate,
+      seconds: exitPassage(point, candidate).seconds + streetSeconds(candidate),
+    }))
+    .sort(
+      (a, b) => a.seconds - b.seconds || a.candidate.id.localeCompare(b.candidate.id),
+    )[0].candidate;
+  const platform = stationAccessSeconds(
+      stop,
+      ride.transit?.lines[0] ?? ride.lineName ?? '',
+      kind,
+      now,
+    ),
+    passage = exitPassage(point, exit);
+  const step = stationAccessStep(ride, kind, id, now, {
+    station: found.station,
+    exit,
+    kind: kind === 'exit' ? 'exit' : 'entrance',
+    platformSeconds: platform.seconds,
+    platformBasis: platform.source,
+    passageSeconds: passage.seconds,
+    passageMeters: passage.meters,
+    walkSeconds: null,
+  });
+  const meters = Math.round(metersBetween(exit.street, point) * GATE_STREET_DETOUR),
+    seconds = Math.ceil(meters / GATE_STREET_METERS_PER_SECOND);
+  return {
+    ...step,
+    start: point,
+    end: point,
+    distanceMeters: step.distanceMeters + meters,
+    durationSeconds: {
+      min: step.durationSeconds.min + seconds,
+      max: step.durationSeconds.max + seconds,
+    },
+  };
+}
+
 /**
  * Gate-to-platform time before the first boarding of each run of trains, and platform-to-gate time after its last
  * alighting. The access walk ends at the station's map point, so these never overlap the routed street walk; in-station
  * transfers get neither. Entry goes before the boarding waits, so live and published trains are chosen from the clock
- * at which the rider reaches the platform.
+ * at which the rider reaches the platform. With `gateExits`, a station end that `exitFor` leaves open (the itinerary starts or
+ * ends at the station point itself, as an intermediate hub's fragments do, or meets another vehicle there) passes the nearest
+ * exit of that table (stationGateStep) instead of the unnamed platform step.
  */
 export function insertStationAccess(
   segments: readonly BaseSegment[],
   routeId: string,
   now: number,
   exitFor?: (ride: BaseSegment, kind: 'entry' | 'exit') => StationExitChoice | null | undefined,
+  gateExits?: StationExitTable | null,
 ): BaseSegment[] {
+  const step = (ride: BaseSegment, kind: 'entry' | 'exit', id: string) => {
+    const chosen = exitFor?.(ride, kind);
+    return chosen || gateExits === undefined
+      ? stationAccessStep(ride, kind, id, now, chosen)
+      : stationGateStep(ride, kind, id, now, gateExits);
+  };
   // Already timed (a re-enriched itinerary): never count the station twice.
   if (segments.some((segment) => segment.mode === 'entry')) return [...segments];
   const entries = new Map<number, BaseSegment>(),
@@ -244,16 +320,10 @@ export function insertStationAccess(
     if (!staysInStation(segments, index, -1)) {
       let before = index;
       while (segments[before - 1]?.mode === 'wait') before--;
-      entries.set(
-        before,
-        stationAccessStep(ride, 'entry', `${routeId}-entry-${k}`, now, exitFor?.(ride, 'entry')),
-      );
+      entries.set(before, step(ride, 'entry', `${routeId}-entry-${k}`));
     }
     if (!staysInStation(segments, index, 1))
-      exits.set(
-        index,
-        stationAccessStep(ride, 'exit', `${routeId}-exit-${k}`, now, exitFor?.(ride, 'exit')),
-      );
+      exits.set(index, step(ride, 'exit', `${routeId}-exit-${k}`));
   });
   return segments.flatMap((segment, index) => [
     ...(entries.has(index) ? [entries.get(index)!] : []),
@@ -902,8 +972,12 @@ export async function enrichTransitRoutes(
         });
       }
       const exits = routeExits.get(route)?.rides;
-      segments = insertStationAccess(segments, route.id, context.now, (ride, kind) =>
-        exits?.get(`${ride.id}:${kind}`),
+      segments = insertStationAccess(
+        segments,
+        route.id,
+        context.now,
+        (ride, kind) => exits?.get(`${ride.id}:${kind}`),
+        context.stationExits === undefined ? bundledStationExits() : context.stationExits,
       );
     } else if (allowance) {
       const remaining = Math.max(

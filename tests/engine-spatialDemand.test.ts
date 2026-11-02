@@ -13,6 +13,11 @@ import {
   ParkingRules,
 } from '../src/common/engine/simulation/parking-rules.js';
 import { Engine, GRID_BOUNDS } from '../src/common/engine/simulation/sim-engine.js';
+import {
+  buildDestinationChoice,
+  ringQuantilesKm,
+  ringRange,
+} from '../src/common/engine/simulation/destination-choice.js';
 import { buildSpatialDemand } from '../src/common/engine/simulation/spatial-demand.js';
 
 const demand = bundledDemand();
@@ -115,4 +120,83 @@ test('crews see the cells without a dock: busy and door cells are rebalanced too
   const dockless = active.filter((cell) => engine.cellDock[cell] < 0);
   assert.ok(dockless.length > 300, `${dockless.length} active cells without a dock`);
   assert.ok(active.length > dockless.length);
+});
+
+test('§22.10 the daily balance gives every dock back about the riders it sends, both day types', () => {
+  const { destinations } = buildSpatialDemand(demand, real, grid);
+  const [low, high] = ASSUMPTIONS.demand.balanceClip;
+  for (const day of ['weekday', 'weekend'] as const) {
+    const [before, after] = destinations.imbalance[day];
+    // Without it a quarter of the riders end at another dock than the ones that send them.
+    assert.ok(before > 0.2, `${day} unbalanced ${before}`);
+    assert.ok(after < 0.015, `${day} balanced ${after}`);
+    const balance = destinations.balance[day];
+    assert.ok(balance.every((value) => value >= low && value <= high));
+    // Each trip end's weight is its attraction (return weight + floor) × its balance.
+    const returns = buildSpatialDemand(demand, real, grid).returnWeight![day];
+    for (const dock of [0, 100, 1_000, demand.count - 1])
+      for (const hour of [3, 8, 18]) {
+        const expected =
+          (returns[dock * 24 + hour] + ASSUMPTIONS.demand.returnWeightFloor) * balance[dock];
+        assert.ok(Math.abs(destinations.weight[day][dock * 24 + hour] - expected) < 1e-9);
+      }
+    // The pair table keeps its own trips, each target weighted by its balance.
+    const origin = demand.odStart.findIndex((start, dock) => demand.odStart[dock + 1] - start > 3);
+    const from = demand.odStart[origin],
+      to = demand.odStart[origin + 1];
+    let running = 0;
+    for (let slot = from; slot < to; slot++) {
+      running +=
+        (demand.odCumulative[slot] - (slot > from ? demand.odCumulative[slot - 1] : 0)) *
+        balance[demand.odTo[slot]];
+      assert.ok(Math.abs(destinations.odCumulative[day][slot] - running) < 1e-9);
+    }
+  }
+});
+
+test('§22.10 the destination model is the same for the same inputs, built again from scratch', () => {
+  const spatial = buildSpatialDemand(demand, real, grid);
+  // A copy of the table is another cache key: the neighbours and the balance are computed again.
+  const copy = { ...demand };
+  const again = buildDestinationChoice(copy, spatial.dockRate!, spatial.returnWeight!);
+  assert.notEqual(again, spatial.destinations);
+  assert.deepEqual(again.start, spatial.destinations.start);
+  assert.deepEqual(again.near, spatial.destinations.near);
+  for (const day of ['weekday', 'weekend'] as const) {
+    assert.deepEqual(again.balance[day], spatial.destinations.balance[day]);
+    assert.deepEqual(again.weight[day], spatial.destinations.weight[day]);
+  }
+  // Neighbours are sorted by distance and stop at `ringMaxMeters`.
+  const { start, meters } = spatial.destinations;
+  for (const dock of [0, 500, 2_000]) {
+    for (let k = start[dock] + 1; k < start[dock + 1]; k++) assert.ok(meters[k] >= meters[k - 1]);
+    assert.ok(meters[start[dock + 1] - 1] <= ASSUMPTIONS.demand.ringMaxMeters);
+  }
+});
+
+test('§22.10 the ring holds the docks at the drawn distance; the balance spreads over the rider mix', () => {
+  const { destinations } = buildSpatialDemand(demand, real, grid);
+  const range = new Int32Array(2);
+  const { ringHalfWidth, ringWiden } = ASSUMPTIONS.demand;
+  for (const dock of [10, 700, 1_900])
+    for (const meters of [400, 1_800, 4_000])
+      for (let widening = 0; widening < 3; widening++) {
+        if (!ringRange(destinations, dock, meters, widening, range)) continue;
+        const width = ringHalfWidth * Math.pow(ringWiden, widening);
+        for (let k = range[0]; k < range[1]; k++) {
+          assert.ok(destinations.meters[k] >= meters * (1 - width));
+          assert.ok(destinations.meters[k] < meters * (1 + width));
+        }
+      }
+  // Equal-probability distances of the rider types' log-normals (§5.1): in their ranges, rising,
+  // the median between the student's 1.2 km and the late-night rider's 2.5 km.
+  const flat = new Array(24).fill(1);
+  for (const day of ['weekday', 'weekend'] as const) {
+    const km = ringQuantilesKm(flat, day, demand.loopShare);
+    assert.equal(km.length, ASSUMPTIONS.demand.ringQuantiles);
+    for (let index = 1; index < km.length; index++) assert.ok(km[index] > km[index - 1]);
+    assert.ok(km[0] >= 0.4 && km[km.length - 1] <= 7);
+    const median = (km[11] + km[12]) / 2;
+    assert.ok(median > 1.2 && median < 2.5, `${day} median ${median}`);
+  }
 });

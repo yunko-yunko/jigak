@@ -5,6 +5,10 @@ import { DatabaseService } from '../database/database.service.js';
 import { ApiError } from '../errors.js';
 import { LessThan } from 'typeorm';
 import { ApiRateWindowEntity } from '../database/entities/api-rate-window.entity.js';
+import {
+  isMapArchivePath,
+  MAP_ARCHIVE_REQUESTS_PER_MINUTE,
+} from '../../modules/maps/domain/map-archive.js';
 
 @Injectable()
 export class RateLimitService {
@@ -20,7 +24,11 @@ export class RateLimitService {
     );
     // Each travel-time comparison may call GPT and several suppliers.
     const isTravelTime = path === '/api/travel-times';
-    if ((!isSearch && !isLearning && !isPublic && !isTravelTime) || request.method === 'OPTIONS') {
+    const isMapArchive = isMapArchivePath(path);
+    if (
+      (!isSearch && !isLearning && !isPublic && !isTravelTime && !isMapArchive) ||
+      request.method === 'OPTIONS'
+    ) {
       next();
 
       return;
@@ -38,11 +46,13 @@ export class RateLimitService {
       ? 30
       : isTravelTime
         ? 10
-        : path === '/api/places'
-          ? 600
-          : path === '/api/places/reverse'
-            ? 120
-            : 60;
+        : isMapArchive
+          ? MAP_ARCHIVE_REQUESTS_PER_MINUTE
+          : path === '/api/places'
+            ? 600
+            : path === '/api/places/reverse'
+              ? 120
+              : 60;
 
     try {
       const window = await this.database.transaction(async (manager) => {

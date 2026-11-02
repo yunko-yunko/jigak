@@ -13,6 +13,7 @@ import { AUTH_OPTIONS, type AuthOptions } from '../src/modules/auth/domain/auth.
 import { randomToken, sha256 } from '../src/modules/auth/domain/security.js';
 import {
   CONSENT_VERSION,
+  OUTDATED_CONSENT_MESSAGE,
   type OAuthAdapter,
   type SocialIdentity,
 } from '../src/modules/auth/domain/types.js';
@@ -350,6 +351,83 @@ test('consent gate permits pending me and explicit consent while protecting acco
     code('INVALID_INPUT'),
   );
   assert.ok(token);
+});
+
+test('an account that agreed to an older policy version is asked again and keeps its data and optional choice', async () => {
+  assert.equal(CONSENT_VERSION, '2026-11-02');
+
+  const { repository, service } = application(),
+    { headers } = await login(service, false);
+
+  await service.consents(request({ ...consent, marketingConsent: true }, headers));
+
+  const { id } = (await service.me(request(undefined, headers))).user;
+
+  // The account as the 10-02 text left it, old enough for the unconsented-account sweep to look at it.
+  await db.database
+    .getRepository(UserEntity)
+    .update({ id }, { termsVersion: '2026-10-02', privacyVersion: '2026-10-02', createdAt: 0 });
+  await repository.cleanup();
+
+  const pending = (await service.me(request(undefined, headers))).user;
+
+  assert.equal(pending.needsConsent, true);
+  assert.equal(pending.consents.termsVersion, '2026-10-02');
+  assert.equal(pending.consents.marketingConsent, true);
+  assert.ok(pending.consents.acceptedAt);
+  await assert.rejects(service.preferences(request(undefined, headers)), code('CONSENT_REQUIRED'));
+  // An old app build still agrees to 10-02: it is told to update, in words it shows as they are, and nothing is recorded.
+  assert.equal(OUTDATED_CONSENT_MESSAGE, '약관이 바뀌었어요. 앱을 업데이트한 뒤 다시 동의해 주세요.');
+  for (const outdated of [
+    { termsVersion: '2026-10-02', privacyVersion: '2026-10-02', marketingConsent: false },
+    { termsVersion: CONSENT_VERSION, privacyVersion: '2026-10-02', marketingConsent: false },
+  ]) {
+    await assert.rejects(
+      service.consents(request(outdated, headers)),
+      (error: unknown) =>
+        error instanceof ApiError &&
+        error.code === 'CONSENT_REQUIRED' &&
+        error.status === 403 &&
+        error.message === OUTDATED_CONSENT_MESSAGE,
+    );
+  }
+  // A malformed body, or a version newer than the server's, stays an ordinary 400.
+  for (const malformed of [
+    { termsVersion: '2026-10-02', privacyVersion: '2026-10-02' },
+    { termsVersion: '2026-10-02', privacyVersion: '2026-10-02', marketingConsent: 'yes' },
+    { termsVersion: '2026-10-02', privacyVersion: '2026-10-02', marketingConsent: true, extra: 1 },
+    { termsVersion: 'old', privacyVersion: 'old', marketingConsent: true },
+    { termsVersion: '2099-01-01', privacyVersion: '2026-10-02', marketingConsent: true },
+  ]) {
+    await assert.rejects(service.consents(request(malformed, headers)), code('INVALID_INPUT'));
+  }
+
+  const stillPending = (await service.me(request(undefined, headers))).user;
+
+  assert.equal(stillPending.needsConsent, true);
+  assert.equal(stillPending.consents.termsVersion, '2026-10-02');
+  assert.equal(stillPending.consents.marketingConsent, true);
+
+  const renewed = await service.consents(request({ ...consent, marketingConsent: true }, headers));
+
+  assert.equal(renewed.user.needsConsent, false);
+  assert.equal(renewed.user.consents.termsVersion, CONSENT_VERSION);
+  assert.equal(renewed.user.consents.privacyVersion, CONSENT_VERSION);
+  assert.equal(renewed.user.consents.marketingConsent, true);
+  await service.preferences(request(undefined, headers));
+});
+
+test('an account asked to agree again can still delete itself without agreeing', async () => {
+  const { service } = application(),
+    { headers } = await login(service);
+  const { id } = (await service.me(request(undefined, headers))).user;
+
+  await db.database
+    .getRepository(UserEntity)
+    .update({ id }, { termsVersion: '2026-10-02', privacyVersion: '2026-10-02' });
+  assert.equal((await service.me(request(undefined, headers))).user.needsConsent, true);
+  await service.deleteAccount(request({ confirmation: '탈퇴' }, headers), response().response);
+  await assert.rejects(service.me(request(undefined, headers)), code('AUTH_REQUIRED'));
 });
 
 test('web exchange pins origin and hides bearer; cookie mutations require origin and CSRF', async () => {
@@ -934,6 +1012,18 @@ test('Nest HTTP controllers preserve Apple form callback, safe errors, cookie CS
       'X-CSRF-Token': output.csrfToken,
     };
 
+    const outdated = await json(
+      '/auth/consents',
+      'POST',
+      { termsVersion: '2026-10-02', privacyVersion: '2026-10-02', marketingConsent: false },
+      csrfHeaders,
+    );
+
+    assert.equal(outdated.status, 403);
+    assert.deepEqual(((await outdated.json()) as { error: { code: string; message: string } }).error, {
+      code: 'CONSENT_REQUIRED',
+      message: OUTDATED_CONSENT_MESSAGE,
+    });
     assert.equal((await json('/auth/consents', 'POST', consent, csrfHeaders)).status, 200);
 
     const support = await json(

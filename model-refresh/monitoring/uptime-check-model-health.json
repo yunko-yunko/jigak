@@ -1,0 +1,20 @@
+{
+  "displayName": "jigak API model health (modelRefresh.status ok)",
+  "monitoredResource": {
+    "type": "uptime_url",
+    "labels": { "project_id": "__PROJECT__", "host": "__API_HOST__" }
+  },
+  "httpCheck": {
+    "path": "/api/health",
+    "port": 443,
+    "useSsl": true,
+    "validateSsl": true,
+    "requestMethod": "GET"
+  },
+  "contentMatchers": [
+    { "content": "\"modelRefresh\":{\"status\":\"ok\"", "matcher": "CONTAINS_STRING" }
+  ],
+  "period": "900s",
+  "timeout": "10s",
+  "selectedRegions": ["ASIA_PACIFIC"]
+}

@@ -1,0 +1,4 @@
+# The model refresh job checks these fixed inputs by sha256 (model-refresh/data-static/README.md): keep their bytes on every
+# platform, also in the backend-only repository, which does not carry the monorepo's .gitattributes.
+model-refresh/data-static/*.csv -text
+model-refresh/data-static/*.json -text

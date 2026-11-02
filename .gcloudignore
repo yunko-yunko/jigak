@@ -18,3 +18,4 @@ deploy/*.secrets.*
 *.sqlite-*
 /data
 *.log
+/model-refresh/data

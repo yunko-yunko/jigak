@@ -1,0 +1,21 @@
+{
+  "displayName": "jigak model refresh: alert (model about to expire or refresh failing)",
+  "documentation": {
+    "content": "The refresh job logged model-refresh-alert: a model has less than 48 hours left and the refresh failed, or a model already expired. Routing falls back to the provider times meanwhile. Steps: gcloud run jobs executions list --job jigak-model-refresh --region asia-northeast3; read runs/<runId>/report.json in the models bucket; see jigak-backend/docs/MODEL-REFRESH.md.",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "conditions": [
+    {
+      "displayName": "model-refresh-alert log line",
+      "conditionMatchedLog": {
+        "filter": "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"jigak-model-refresh\" AND jsonPayload.event=\"model-refresh-alert\""
+      }
+    }
+  ],
+  "alertStrategy": {
+    "notificationRateLimit": { "period": "21600s" },
+    "autoClose": "604800s"
+  },
+  "notificationChannels": ["__CHANNEL__"]
+}

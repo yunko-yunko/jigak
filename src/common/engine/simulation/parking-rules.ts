@@ -988,8 +988,11 @@ export class ParkingRules {
   /**
    * §22.9 a vehicle left off the rules (a violation) where `crowd` says the spot is crowded moves
    * on along the street, rings `doors.farRingMeters` apart out to `doors.spreadFarMeters` from
-   * `angle`, to the first point in the service area that is not crowded; its category stays.
-   * Unchanged when none is free. True when it ends on a free point.
+   * `angle`, to the first point in the service area that is not crowded. Unchanged when none is
+   * free. True when it ends on a free point. §22.10 a category tied to a place (`geometry`: a bus
+   * stop, exit or crosswalk) follows the new point: the buffer it is inside there, else the
+   * pavement (`sidewalk-obstruction`). A drawn behaviour (pavement, roadway, tactile, private,
+   * restricted) moves with the rider and stays.
    */
   clearOfPile(
     angle: number,
@@ -1013,6 +1016,11 @@ export class ParkingRules {
           continue;
         out.latitude = latitude;
         out.longitude = longitude;
+        if (out.geometry) {
+          const layer = this.immediateHit(latitude, longitude);
+          out.category = layer > 0 ? PLACED_CATEGORY[layer] : CATEGORY.SIDEWALK;
+          out.geometry = layer > 0;
+        }
         return true;
       }
     return false;
@@ -1561,3 +1569,10 @@ export class ParkingRules {
 }
 
 const WEIGHTS = new Float64Array(11);
+/** The category of a point inside a layer's immediate-tow buffer (§6.1), by LAYER. */
+const PLACED_CATEGORY: readonly number[] = [
+  CATEGORY.NONE,
+  CATEGORY.BUS_TAXI,
+  CATEGORY.SUBWAY_EXIT,
+  CATEGORY.CROSSWALK,
+];

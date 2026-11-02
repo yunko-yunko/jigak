@@ -1,6 +1,7 @@
 import { ASSUMPTIONS } from './assumptions.js';
 import type { DayType } from './calendar.js';
 import type { Demand } from './demand.js';
+import { buildDestinationChoice, type DestinationChoice } from './destination-choice.js';
 import {
   bundledFootWeights,
   FOOT_LAYERS,
@@ -40,6 +41,8 @@ export interface SpatialDemand {
   scooterFootTarget: Float32Array[] | null;
   /** Per foot-traffic layer, each engine cell's mean 250 m weight (layer * cells + cell); null without the file. */
   footCell: Float32Array | null;
+  /** §22.10 where riders off the pair table end their trips: ring gravity with a daily balance. */
+  destinations: DestinationChoice;
 }
 
 const DAYS = ['weekday', 'weekend'] as const;
@@ -276,5 +279,6 @@ export function buildSpatialDemand(
     footTarget,
     scooterFootTarget,
     footCell,
+    destinations: buildDestinationChoice(demand, dockRate, returnWeight),
   };
 }

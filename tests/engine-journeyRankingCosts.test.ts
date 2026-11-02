@@ -1,20 +1,15 @@
-// Ranking costs of the journey graph (quality FIXPLAN R1, R3, R4): extra vehicle uses cost seconds instead of being
-// refused (a second rental and a boarding after a taxi stay possible when they win by more than their cost), no ride is
-// planned that a walk in the fetched network beats, and no run is made for a boarding timed only by a rule. Shown clocks
-// stay physical.
+// Ranking rules of the journey graph (quality FIXPLAN R1, R3, R4, user decision D1 of 2026-11-02): ranking is the arrival
+// alone, so a second rental or a boarding after a taxi is neither refused nor priced and wins exactly when it arrives sooner,
+// in the main search, a tab's search and a pure tab search alike. No ride is planned that a walk in the fetched network
+// beats, and no run is made for a boarding timed only by a rule. Shown clocks stay physical.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  BOARDING_PENALTY_SECONDS,
-  MIN_RIDE_SAVING_SECONDS,
-  RENTAL_PENALTY_SECONDS,
-  planJourneyGraph,
-  rankingPenaltySeconds,
-} from '../src/common/engine/journey-graph.js';
+import * as journeyGraph from '../src/common/engine/journey-graph.js';
 import { rideKey } from '../src/common/engine/ride-identity.js';
 import { DEFAULT_PREFERENCES } from '../src/common/shared/domain/index.js';
 import type { BaseRoute, BaseSegment, Place } from '../src/common/shared/domain/types.js';
 
+const { MIN_RIDE_SAVING_SECONDS, planJourneyGraph } = journeyGraph;
 const NOW = Date.parse('2026-10-12T05:00:00Z');
 const point = (id: string, meters: number): Place => ({
   id,
@@ -79,35 +74,23 @@ const search = (sources: BaseRoute[], options: { rankingCosts?: boolean } = {}) 
 const modes = (route: BaseRoute) => route.segments.map((segment) => segment.mode);
 const walkAll = () => source('walk-all', [leg('walk-all', 'walk', O, D, 700)]);
 
-test('the constants are the assumed values and a fixed price per extra vehicle use', () => {
-  assert.equal(BOARDING_PENALTY_SECONDS, 120);
-  assert.equal(RENTAL_PENALTY_SECONDS, 150);
+test('the short-ride saving is the assumed value and no price per vehicle use is left (D1)', () => {
   assert.equal(MIN_RIDE_SAVING_SECONDS, 120);
-  const bus = (id: string) => leg(id, 'bus', O, A, 60);
-  assert.equal(rankingPenaltySeconds([bus('a')]), 0);
-  assert.equal(
-    rankingPenaltySeconds([bus('a'), leg('walk', 'walk', A, B, 60), leg('b', 'subway', B, D, 60)]),
-    BOARDING_PENALTY_SECONDS,
+  // The Windows session's ranking costs are gone, not merely set to zero.
+  for (const name of ['BOARDING_PENALTY_SECONDS', 'RENTAL_PENALTY_SECONDS', 'rankingPenaltySeconds'])
+    assert.equal(name in journeyGraph, false, name);
+  // Two boardings: the objective is the physical arrival (the boarding waits and rides on the clock), nothing added for the
+  // second boarding.
+  const transfer = search([
+    source('first', [leg('first-bus', 'bus', O, A, 60)]),
+    source('between', [leg('between-walk', 'walk', A, B, 60)]),
+    source('second', [leg('second-train', 'subway', B, D, 60)]),
+  ]);
+  assert.deepEqual(
+    modes(transfer.routes[0]).filter((mode) => mode !== 'wait'),
+    ['bus', 'walk', 'subway'],
   );
-  assert.equal(
-    rankingPenaltySeconds([
-      leg('hire', 'hire', O, O, 30),
-      leg('ride', 'ebike', O, A, 60),
-      leg('return', 'return', A, A, 20),
-      bus('b'),
-    ]),
-    BOARDING_PENALTY_SECONDS,
-  );
-  // A second rental after a bus is priced as a rental.
-  assert.equal(
-    rankingPenaltySeconds([
-      bus('a'),
-      leg('hire', 'hire', A, A, 30),
-      leg('ride', 'ebike', A, B, 60),
-      leg('return', 'return', B, B, 20),
-    ]),
-    RENTAL_PENALTY_SECONDS,
-  );
+  assert.equal(transfer.diagnostics.bestObjectiveSeconds, transfer.routes[0].durationSeconds.max);
 });
 
 test('a one-stop bus that saves under two minutes over walking its stretch is not planned', () => {
@@ -131,7 +114,7 @@ test('a one-stop bus that saves under two minutes over walking its stretch is no
   assert.deepEqual(priced.routes[0].durationSeconds, { min: 700, max: 700 });
   assert.ok(priced.diagnostics.shortRides > 0);
 
-  // With the costs off the same graph takes the bus, because it does arrive 80 s sooner: the rule is the ranking, not the data.
+  // With the walk comparisons off the same graph takes the bus, because it does arrive 80 s sooner: the rule is the ranking, not the data.
   const plain = search(sources, { rankingCosts: false });
   assert.deepEqual(modes(plain.routes[0]), ['wait', 'bus', 'walk']);
   assert.deepEqual(plain.routes[0].durationSeconds, { min: 620, max: 620 });
@@ -151,7 +134,7 @@ test('a one-stop bus with no walk of its stretch in the network is kept, however
   assert.deepEqual(modes(result.routes[0]), ['wait', 'bus', 'walk']);
   assert.equal(result.diagnostics.shortRides, 0);
 
-  // The only way to a place is a short bus: with the costs on, it is still found.
+  // The only way to a place is a short bus: with the walk comparisons on, it is still found.
   const alone = search([
     source('alone', [leg('a-wait', 'wait', O, O, 480), leg('a-bus', 'bus', O, D, 220)], 1500),
   ]);
@@ -174,7 +157,7 @@ test('a bus that clearly beats walking its stretch is still planned', () => {
   assert.equal(result.diagnostics.shortRides, 0);
 });
 
-test('a boarding after a taxi is priced like any other, so it is planned when it is the fastest way', () => {
+test('a boarding after a taxi is neither refused nor priced: it is planned exactly when it arrives sooner', () => {
   const taxiHop = source('taxi-hop', [
     leg('pickup', 'wait', O, O, 40),
     leg('taxi-hop', 'taxi', O, A, 100, { costWon: 5000 }),
@@ -189,22 +172,32 @@ test('a boarding after a taxi is priced like any other, so it is planned when it
     return taxiAt >= 0 && modes(route).slice(taxiAt).includes('bus');
   };
 
-  // Taxi 140 s and bus 90 s arrive in 230 s; with the 120 s boarding cost that is 350 s, far under the 700 s walk.
-  const priced = search([walkAll(), taxiHop, busRest]);
+  // Taxi 140 s and bus 90 s arrive in 230 s, far under the 700 s walk; the objective is that arrival, nothing added.
+  const fast = search([walkAll(), taxiHop, busRest]);
   assert.deepEqual(
-    modes(priced.routes[0]).filter((mode) => mode !== 'wait'),
+    modes(fast.routes[0]).filter((mode) => mode !== 'wait'),
     ['taxi', 'bus'],
   );
-  assert.deepEqual(priced.routes[0].durationSeconds, { min: 230, max: 230 });
-  assert.equal(afterTaxi(priced.routes[0]), true);
+  assert.deepEqual(fast.routes[0].durationSeconds, { min: 230, max: 230 });
+  assert.equal(afterTaxi(fast.routes[0]), true);
+  assert.equal(fast.diagnostics.bestObjectiveSeconds, 230);
 
-  // A walk only 70 s slower than the taxi and bus (300 s against 230 s) wins once the boarding is priced.
+  // A walk 70 s slower than the taxi and bus (300 s against 230 s) no longer wins: the taxi and bus arrive sooner (D1).
   const nearWalk = () => source('near', [leg('near-walk', 'walk', O, D, 300)]);
   const near = search([nearWalk(), taxiHop, busRest]);
-  assert.deepEqual(modes(near.routes[0]), ['walk']);
-  assert.deepEqual(near.routes[0].durationSeconds, { min: 300, max: 300 });
+  assert.equal(afterTaxi(near.routes[0]), true);
+  assert.deepEqual(near.routes[0].durationSeconds, { min: 230, max: 230 });
+  assert.equal(near.diagnostics.bestObjectiveSeconds, 230);
+  assert.ok(near.routes.some((route) => modes(route).join() === 'walk'));
+  // The walk comparisons do not change it: the same route without them.
   const plain = search([nearWalk(), taxiHop, busRest], { rankingCosts: false });
   assert.equal(afterTaxi(plain.routes[0]), true);
+  assert.deepEqual(plain.routes[0].durationSeconds, { min: 230, max: 230 });
+
+  // A walk that arrives a second sooner (229 s) is the route chosen: the arrival alone decides.
+  const quick = search([source('quick', [leg('quick-walk', 'walk', O, D, 229)]), taxiHop, busRest]);
+  assert.deepEqual(modes(quick.routes[0]), ['walk']);
+  assert.deepEqual(quick.routes[0].durationSeconds, { min: 229, max: 229 });
 });
 
 const lease = (id: string, start: Place, end: Place, rideSeconds: number) =>
@@ -222,7 +215,7 @@ const lease = (id: string, start: Place, end: Place, rideSeconds: number) =>
   ]);
 const hires = (route: BaseRoute) => route.segments.filter((s) => s.mode === 'hire').length;
 
-test('a second rental costs RENTAL_PENALTY_SECONDS: e-bike, bus, e-bike loses to a pure e-bike but beats a slow one', () => {
+test('a second rental is neither refused nor priced: e-bike, bus, e-bike wins whenever it arrives sooner', () => {
   const first = lease('first', O, A, 40);
   const second = lease('second', B, D, 40);
   const middle = source(
@@ -231,27 +224,104 @@ test('a second rental costs RENTAL_PENALTY_SECONDS: e-bike, bus, e-bike loses to
     1500,
   );
 
-  // The chain is 240 s plus a boarding (120 s) and a second rental (150 s) = 510 s, against a 350 s pure e-bike.
+  // The chain arrives in 240 s (90 s, 60 s, 90 s) against a 350 s pure e-bike: the chain is the route chosen (D1).
   const pure = lease('pure', O, D, 300);
-  const priced = search([first, middle, second, pure]);
-  assert.ok(priced.routes.length > 0);
-  assert.equal(modes(priced.routes[0]).includes('bus'), false);
-  assert.deepEqual(priced.routes[0].durationSeconds, { min: 350, max: 350 });
-  assert.equal(hires(priced.routes[0]), 1);
-
-  // Priced alone, the chain is the faster journey by two rentals' worth of time.
+  const result = search([first, middle, second, pure]);
+  assert.equal(hires(result.routes[0]), 2);
+  assert.equal(modes(result.routes[0]).includes('bus'), true);
+  assert.deepEqual(result.routes[0].durationSeconds, { min: 240, max: 240 });
+  assert.equal(result.diagnostics.bestObjectiveSeconds, 240);
+  assert.ok(result.routes.some((route) => hires(route) === 1 && route.durationSeconds.max === 350));
   const plain = search([first, middle, second, pure], { rankingCosts: false });
   assert.equal(hires(plain.routes[0]), 2);
   assert.deepEqual(plain.routes[0].durationSeconds, { min: 240, max: 240 });
-  assert.ok(
-    plain.routes[0].durationSeconds.max + RENTAL_PENALTY_SECONDS + BOARDING_PENALTY_SECONDS > 350,
-  );
 
-  // Against a pure e-bike that takes 850 s the chain wins by more than its 270 s of cost, so it is the route chosen.
-  const slow = search([first, middle, second, lease('slow', O, D, 800)]);
-  assert.equal(hires(slow.routes[0]), 2);
-  assert.equal(modes(slow.routes[0]).includes('bus'), true);
-  assert.deepEqual(slow.routes[0].durationSeconds, { min: 240, max: 240 });
+  // A pure e-bike that arrives a second sooner (239 s) wins: the arrival alone decides.
+  const quick = search([first, middle, second, lease('quick', O, D, 189)]);
+  assert.equal(hires(quick.routes[0]), 1);
+  assert.deepEqual(quick.routes[0].durationSeconds, { min: 239, max: 239 });
+});
+
+test("a tab's representative route is its fastest, with a second rental or a boarding after a taxi (D1)", () => {
+  const tab = (sources: BaseRoute[], requiredMode: 'bus' | 'ebike' | 'taxi') =>
+    planJourneyGraph(request(), sources, { receivedAt: NOW, maxResults: 1, requiredMode });
+  const chain = () => [
+    lease('first', O, A, 40),
+    source('middle', [leg('middle-wait', 'wait', A, A, 20), leg('middle-bus', 'bus', A, B, 40)], 1500),
+    lease('second', B, D, 40),
+  ];
+  // The e-bike tab: the 240 s chain over a 350 s pure e-bike (the costs had kept the pure one, 240 + 120 + 150 > 350).
+  const ebike = tab([...chain(), lease('pure', O, D, 300)], 'ebike');
+  assert.equal(ebike.routes.length, 1);
+  assert.equal(hires(ebike.routes[0]), 2);
+  assert.deepEqual(ebike.routes[0].durationSeconds, { min: 240, max: 240 });
+  // The bus tab: the same chain over a 320 s direct bus.
+  const direct = source(
+    'direct',
+    [leg('direct-wait', 'wait', O, O, 20), leg('direct-bus', 'bus', O, D, 300)],
+    1500,
+  );
+  const bus = tab([...chain(), direct], 'bus');
+  assert.equal(hires(bus.routes[0]), 2);
+  assert.deepEqual(bus.routes[0].durationSeconds, { min: 240, max: 240 });
+
+  // The taxi tab: taxi then bus (230 s) over a direct taxi of 300 s (the costs had kept the taxi, 230 + 120 > 300).
+  const taxiHop = source('taxi-hop', [
+    leg('pickup', 'wait', O, O, 40),
+    leg('taxi-hop', 'taxi', O, A, 100, { costWon: 5000 }),
+  ]);
+  const busRest = source(
+    'bus-rest',
+    [leg('bus-rest-wait', 'wait', A, A, 30), leg('bus-rest', 'bus', A, D, 60)],
+    1500,
+  );
+  const taxiOnly = source('taxi-only', [
+    leg('pickup-direct', 'wait', O, O, 40),
+    leg('taxi-direct', 'taxi', O, D, 260, { costWon: 7000 }),
+  ]);
+  const taxi = tab([taxiHop, busRest, taxiOnly], 'taxi');
+  assert.deepEqual(
+    modes(taxi.routes[0]).filter((mode) => mode !== 'wait'),
+    ['taxi', 'bus'],
+  );
+  assert.deepEqual(taxi.routes[0].durationSeconds, { min: 230, max: 230 });
+});
+
+test('a pure tab search keeps a faster change of buses over a slower one-seat bus (D1)', () => {
+  const firstBus = source(
+    'first-bus',
+    [
+      leg('first-wait', 'wait', O, O, 20),
+      leg('first-ride', 'bus', O, A, 40, { transit: { lines: ['100'], stops: [] } }),
+    ],
+    1500,
+  );
+  const secondBus = source(
+    'second-bus',
+    [
+      leg('second-wait', 'wait', A, A, 20),
+      leg('second-ride', 'bus', A, D, 60, { transit: { lines: ['200'], stops: [] } }),
+    ],
+    1500,
+  );
+  const oneSeat = source(
+    'one-seat',
+    [
+      leg('one-seat-wait', 'wait', O, O, 20),
+      leg('one-seat-ride', 'bus', O, D, 200, { transit: { lines: ['300'], stops: [] } }),
+    ],
+    1500,
+  );
+  // The change arrives in 140 s, the one-seat bus in 220 s (the costs had kept the one-seat bus, 140 + 120 > 220).
+  const pure = planJourneyGraph(request(), [firstBus, secondBus, oneSeat], {
+    receivedAt: NOW,
+    maxResults: 1,
+    pureMode: 'bus',
+  });
+  assert.equal(pure.routes.length, 1);
+  assert.equal(modes(pure.routes[0]).filter((mode) => mode === 'bus').length, 2);
+  assert.deepEqual(pure.routes[0].durationSeconds, { min: 140, max: 140 });
+  assert.equal(pure.diagnostics.bestObjectiveSeconds, 140);
 });
 
 test('a bike returned and another hired with no transit between is still one rental cut in two', () => {

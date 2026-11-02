@@ -16,6 +16,7 @@ import {
   metersApart,
   ParkingRules,
   parseParkingRules,
+  Placement,
 } from '../src/common/engine/simulation/parking-rules.js';
 import {
   ALLOWED_TRANSITIONS,
@@ -1389,9 +1390,8 @@ test('mixed fleet: each type converges over two weeks and starts near its own te
       // 21 (their pack count is still settling at 7 days: 484 against 370 for the default seed, 460 against 396 on
       // average of six seeds). The template is the state a 14-day run leaves, so the 14-day count is held to it.
       // The pack count is the one state that moves with the sampling: six seeds of the same 14 days spread by about
-      // 0.5% of the fleet, and on average they sit 0.75% (scooters) and 0.45% (e-bikes) of the fleet under the template
-      // the older model measured, so it gets 0.75% for the week-to-week change and 1.25% against the template; every
-      // other state keeps 1%.
+      // 0.5% of the fleet, so it gets 0.75% for the week-to-week change. §22.10 recalibrated the pack templates to the
+      // real fleet's 14 days (5.8% / 4.9%), which this fleet's 14 days also meet within 1% like every other state.
       const [earlier, later] = type === VTYPE.EBIKE ? [fortnight, threeWeeks] : [week, fortnight];
       const a = earlier[type][op],
         b = later[type][op],
@@ -1402,7 +1402,7 @@ test('mixed fleet: each type converges over two weeks and starts near its own te
         `${TYPE_NAMES[type]} ${name}: ${a} a week earlier, ${b} later`,
       );
       assert.ok(
-        Math.abs(atTemplate - share * fleet) <= fleet * (pack ? 0.0125 : 0.01),
+        Math.abs(atTemplate - share * fleet) <= fleet * 0.01,
         `${TYPE_NAMES[type]} ${name}: template ${share * fleet}, two weeks ${atTemplate}`,
       );
     }
@@ -1603,4 +1603,174 @@ test('realism bands for 4,000 scooters + 8,000 e-bikes (§16.7, §19)', () => {
     }
   });
   busy.forEach((time, type) => band(`crew type ${type} busy`, time / onShift[type], 0.4, 0.95));
+});
+
+/** An engine at the template of `date`'s warm-up start, nothing run (§11.2). */
+function templateEngine(date: string) {
+  const day = dayOf(date);
+  const engine = new Engine({
+    demand: bundledDemand(),
+    rules,
+    seed: 'jigak',
+    fleet: FLEET,
+    startsAt: day.startsAt,
+    endsAt: day.endsAt,
+    date: day.date,
+  });
+  engine.ops.initTemplate(engine.warmupFrom);
+  return engine;
+}
+
+test('§22.10 a swap-round wait ends with the low pack, and any wait when the vehicle leaves the street', () => {
+  const engine = templateEngine(TUESDAY);
+  const time = engine.warmupFrom + HOUR;
+  const waiting: number[] = [];
+  for (let vehicle = 0; vehicle < FLEET; vehicle++)
+    if (engine.op[vehicle] === OP.LOW_BATTERY && engine.taskRetryAt[vehicle] > time + HOUR)
+      waiting.push(vehicle);
+  assert.ok(waiting.length >= 3, `${waiting.length} template packs waiting for their round`);
+  const [still, swapped, collected] = waiting;
+  // Still low: the round holds.
+  const round = engine.taskRetryAt[still];
+  engine.ops.vehicleChanged(still, time);
+  assert.equal(engine.taskRetryAt[still], round);
+  // Swapped by another round (a full pack, rentable): its next task is not held back any more.
+  engine.setBattery(swapped, 100, time);
+  engine.setOp(swapped, OP.AVAILABLE, time);
+  engine.ops.vehicleChanged(swapped, time);
+  assert.equal(engine.taskRetryAt[swapped], 0);
+  // Taken off the street (a van): the wait is gone when it comes back.
+  engine.setOp(collected, OP.ON_CREW_VAN, time);
+  engine.ops.vehicleChanged(collected, time);
+  assert.equal(engine.taskRetryAt[collected], 0);
+});
+
+test('§22.10 a violation moved off a pile takes the category of where it ends', () => {
+  const stops = rules.meta.busStops;
+  assert.ok(stops > 100);
+  const buffer = ASSUMPTIONS.parking.bufferMeters.busStop;
+  let pavement = 0,
+    kept = 0;
+  for (let stop = 0; stop < stops && (pavement < 5 || kept < 5); stop += 37) {
+    const latitude = rules.featureLatitude(LAYER.BUS, stop),
+      longitude = rules.featureLongitude(LAYER.BUS, stop);
+    if (rules.immediateHit(latitude, longitude) !== LAYER.BUS) continue;
+    // Everything within the stop's buffer (and a little more) is a pile.
+    const crowd = (lat: number, lon: number) =>
+      metersApart(lat, lon, latitude, longitude) <= buffer + 2 ? 1 : 0;
+    for (const [category, geometry] of [
+      [CATEGORY.BUS_TAXI, true],
+      [CATEGORY.ROADWAY, false],
+    ] as const) {
+      const out = new Placement();
+      out.latitude = latitude;
+      out.longitude = longitude;
+      out.category = category;
+      out.geometry = geometry;
+      if (!rules.clearOfPile(0.3, out, crowd)) continue;
+      assert.ok(metersApart(out.latitude, out.longitude, latitude, longitude) > buffer + 2);
+      if (!geometry) {
+        // A drawn behaviour moves with the rider.
+        assert.equal(out.category, CATEGORY.ROADWAY);
+        assert.equal(out.geometry, false);
+        kept++;
+        continue;
+      }
+      // The stop is behind it now: the category is that of the new point.
+      const layer = rules.immediateHit(out.latitude, out.longitude);
+      if (layer > 0) assert.equal(out.geometry, true);
+      else {
+        assert.equal(out.category, CATEGORY.SIDEWALK, `stop ${stop}`);
+        assert.equal(out.geometry, false);
+        pavement++;
+      }
+    }
+  }
+  assert.ok(pavement >= 5 && kept >= 5, `${pavement} to the pavement, ${kept} kept`);
+});
+
+test('§22.10 a patrol that steps aside from a full spot stays within its re-park reach', () => {
+  const engine = templateEngine(TUESDAY);
+  const time = engine.warmupFrom + HOUR;
+  const ops = engine.ops as unknown as {
+    crowd: (latitude: number, longitude: number) => number;
+    fixParking(
+      vehicle: number,
+      time: number,
+      crew: number,
+      maxMeters: number,
+      log: boolean,
+    ): number;
+  };
+  const maxMeters = 8,
+    full = 6;
+  let stepped = 0,
+    stayed = 0;
+  for (let vehicle = 0; vehicle < FLEET && stepped + stayed < 300; vehicle += 7) {
+    const fromLat = engine.lat[vehicle],
+      fromLon = engine.lon[vehicle];
+    // Off a no-return spot a patrol goes as far as the next legal one (§20.3), as before.
+    if (
+      engine.op[vehicle] !== OP.AVAILABLE ||
+      rules.returnEffect(engine.vType[vehicle], fromLat, fromLon) === RETURN.NO_RETURN
+    )
+      continue;
+    // Every point within 6 m of where it stands is full: the step aside goes 6–60 m out.
+    ops.crowd = (latitude, longitude) =>
+      metersApart(latitude, longitude, fromLat, fromLon) <= full ? 1 : 0;
+    engine.category[vehicle] = CATEGORY.SIDEWALK;
+    const moved = ops.fixParking(vehicle, time, 0, maxMeters, false);
+    assert.ok(moved <= maxMeters + 0.2, `vehicle ${vehicle} moved ${moved.toFixed(1)} m`);
+    if (moved > full) stepped++;
+    else stayed++;
+  }
+  assert.ok(stepped > 0 && stayed > 0, `${stepped} stepped aside, ${stayed} kept the spot`);
+});
+
+test('§22.10 the busiest cells keep most of their vehicles over a day (destination balance)', () => {
+  // Cells ranked by the riders the demand map sends from them, not by the rentals that happened.
+  const engine = templateEngine(TUESDAY);
+  const cells = engine.cellDock.length;
+  for (const date of [TUESDAY, SATURDAY]) {
+    const data = windowOf(date).data;
+    const day = dayOf(date);
+    const dayType = data.meta.dayType;
+    const expected = new Float64Array(cells);
+    const docks = engine.demand.docks;
+    for (let dock = 0; dock < engine.demand.count; dock++) {
+      const cell = engine.cellGrid.cell(docks[dock * 2], docks[dock * 2 + 1]);
+      if (cell < 0) continue;
+      for (let hour = 0; hour < 24; hour++)
+        expected[cell] += engine.dockRateAt(dayType, dock, hour);
+    }
+    const rents = new Float64Array(cells),
+      ends = new Float64Array(cells);
+    const rent = EVENT_TYPES.indexOf('rent'),
+      end = EVENT_TYPES.indexOf('ride-end');
+    const events = data.events;
+    for (let index = 0; index < events.t.length; index++) {
+      if (events.t[index] < day.startsAt || events.t[index] >= day.endsAt) continue;
+      const type = events.type[index];
+      if (type !== rent && type !== end) continue;
+      const cell = engine.cellGrid.cell(events.lat[index], events.lon[index]);
+      if (cell >= 0) (type === rent ? rents : ends)[cell]++;
+    }
+    const ranked = Array.from(expected.keys())
+      .filter((cell) => expected[cell] > 0)
+      .sort((a, b) => expected[b] - expected[a] || a - b);
+    const top = ranked.slice(0, Math.round(ranked.length / 10));
+    let rented = 0,
+      ended = 0;
+    for (const cell of top) {
+      rented += rents[cell];
+      ended += ends[cell];
+    }
+    // The random-bearing destinations of §22 lost 19–20% of these cells' vehicles a day (7–10% now;
+    // real 따릉이 within ±3%, the rest is riders from around a hub taking its scooters).
+    const gap = (ended - rented) / rented;
+    assert.ok(
+      gap > -0.13 && gap < 0.1,
+      `${date} top 10% of cells ${rented} rented, ${ended} ended`,
+    );
+  }
 });

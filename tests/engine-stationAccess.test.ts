@@ -10,7 +10,7 @@ import {
   applyRailGateEnvelope,
   type RailGatePredictor,
 } from '../src/common/engine/intelligence/rail-gate-service.js';
-import { BOARDING_PENALTY_SECONDS, planJourneyGraph } from '../src/common/engine/journey-graph.js';
+import { planJourneyGraph } from '../src/common/engine/journey-graph.js';
 import { stationBaseName } from '../src/common/engine/realtime/names.js';
 import { taxiSplices } from '../src/common/engine/multimodal.js';
 import { insertStationAccess } from '../src/common/engine/transit-enrichment.js';
@@ -543,11 +543,8 @@ test("a bridge leaving or joining a source at its in-station transfer passes tha
     leg('taxi', 'taxi', B, D, 100, { costWon: 5000 }),
   ]);
   const ride = best([source(900), taxi]);
-  // The objective is the arrival plus the ranking cost of the second vehicle (the taxi after the train).
-  assert.equal(
-    ride.diagnostics.bestObjectiveSeconds,
-    60 + entryA + 60 + 400 + exitB + 40 + 100 + BOARDING_PENALTY_SECONDS,
-  );
+  // The objective is the arrival alone: the taxi after the train adds no ranking cost (D1).
+  assert.equal(ride.diagnostics.bestObjectiveSeconds, 60 + entryA + 60 + 400 + exitB + 40 + 100);
   assert.deepEqual(modes(ride.routes[0].segments), [
     'walk',
     'entry',
@@ -576,7 +573,7 @@ test("a bridge leaving or joining a source at its in-station transfer passes tha
   assert.equal(out.diagnostics.edges, 7);
   assert.equal(
     alone.diagnostics.bestObjectiveSeconds,
-    60 + entryA + 60 + 400 + 90 + 120 + 120 + exitC + 900 + BOARDING_PENALTY_SECONDS,
+    60 + entryA + 60 + 400 + 90 + 120 + 120 + exitC + 900,
   );
 });
 

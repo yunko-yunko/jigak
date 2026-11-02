@@ -1,0 +1,26 @@
+# Builds and pushes the model refresh job image by hand (deploy/model-refresh-job.sh step 6 does this).
+# Run from the jigak-backend root (the backend-only repository root, or jigak-backend/ in the monorepo):
+#   gcloud builds submit . --project P --region asia-northeast3 \
+#     --config model-refresh/cloudbuild.yaml \
+#     --substitutions _IMAGE=asia-northeast3-docker.pkg.dev/P/jigak/jigak-model-refresh:TAG
+# .gcloudignore keeps the upload small; model-refresh/Dockerfile.dockerignore keeps the build context to the job's files.
+# A push to main builds through model-refresh/cloudbuild.trigger.yaml instead.
+substitutions:
+  _IMAGE: ''
+steps:
+  - name: gcr.io/cloud-builders/docker
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - build
+      - -f
+      - model-refresh/Dockerfile
+      - -t
+      - ${_IMAGE}
+      - .
+images:
+  - ${_IMAGE}
+options:
+  # Cloud Build in Seoul, and logs only in Cloud Logging, so no default bucket outside Korea is used.
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1800s

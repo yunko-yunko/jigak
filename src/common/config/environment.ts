@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { ASSUMPTIONS } from '../engine/simulation/assumptions.js';
 import {
@@ -81,6 +82,10 @@ const schema = z.object({
       .regex(/^([01]?\d|2[0-3]):[0-5]\d(,([01]?\d|2[0-3]):[0-5]\d)*$/)
       .default(DEFAULT_REFRESH_SCHEDULE_KST),
   ),
+  // The NGII 1:1,000 map archive (seoul-ngii-v1.pmtiles) as an absolute path, served only through
+  // GET /api/maps/seoul-ngii-v1.pmtiles by byte range. On Cloud Run a private Seoul bucket mounted
+  // read-only. Blank turns the endpoint off (404). A missing file does not stop the server.
+  MAP_NGII_PMTILES_PATH: blankIsDefault(z.string().trim().max(1024).optional()),
 });
 
 export function validateEnvironment(env: NodeJS.ProcessEnv) {
@@ -182,6 +187,13 @@ export function validateEnvironment(env: NodeJS.ProcessEnv) {
         ['MOBILITY_FOOT_WEIGHTS_PATH'],
       );
     }
+  }
+
+  if (config.MAP_NGII_PMTILES_PATH && !isAbsolute(config.MAP_NGII_PMTILES_PATH)) {
+    throw new EnvironmentConfigurationError(
+      'MAP_NGII_PMTILES_PATH: NGII 지도 PMTiles 파일의 절대 경로여야 합니다.',
+      ['MAP_NGII_PMTILES_PATH'],
+    );
   }
 
   return {

@@ -6,6 +6,7 @@ import { fleetByTypeOf } from '../../../common/engine/simulation/sim-window.js';
 import { footWeightsStatus } from '../../../common/engine/simulation/foot-traffic.js';
 import { koreanHolidayOrigin } from '../../../common/engine/intelligence/korean-holidays.js';
 import { modelRefreshSummary } from './model-refresh.js';
+import { ngiiMapStatus } from '../../maps/domain/map-archive.js';
 
 export function healthSnapshot(options: RoutingOptions) {
   const clock = options.now ?? Date.now;
@@ -89,6 +90,8 @@ export function healthSnapshot(options: RoutingOptions) {
           windowStore: options.scooterSimulation.storeConfigured ? 'configured' : 'off',
         }
       : { enabled: false },
+    // The NGII map archive behind /api/maps (set and readable; the path is not shown).
+    maps: { ngii: ngiiMapStatus() },
     // Key presence is configuration, not evidence of an authenticated successful call.
     liveVerified: false,
     realtimeSources: realtime.diagnostics,

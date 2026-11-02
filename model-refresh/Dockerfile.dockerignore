@@ -1,0 +1,16 @@
+# Used by `docker build -f model-refresh/Dockerfile .` (context = the jigak-backend root). Everything is excluded except
+# what model-refresh/Dockerfile copies; the API's .dockerignore applies to the API image only.
+**
+!package.json
+!model-refresh/package.json
+!model-refresh/package-lock.json
+!model-refresh/scripts
+!model-refresh/data-static
+!src/common/engine/intelligence
+!src/common/engine/private-files.ts
+!src/common/engine/realtime/bicycle-ride-times.ts
+!src/common/engine/realtime/data/korea-holidays-*.json
+**/__pycache__
+**/*.pyc
+**/node_modules
+**/.DS_Store

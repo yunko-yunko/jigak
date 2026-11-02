@@ -149,6 +149,10 @@ export const DOCKLESS_PROFILES: Readonly<Record<DocklessMode, DocklessProfile>> 
     allowed: (preferences) => preferences.allowEbike !== false,
   },
 };
+/** True while walks and rides both run on self-hosted networks: a dockless rental then spends no call from the search's
+ * budget, and the optional-stage window does not stop it (those networks answer at once and have no quota). */
+export const docklessRoutingIsFree = (provider: DocklessConnectionContext['provider']) =>
+  routeQueryIsFree(provider, 'walking') && routeQueryIsFree(provider, 'bicycle');
 /** True when this search can offer the kind at all: a router, a policy and the rider's consent. */
 export const docklessEnabled = (
   context: DocklessConnectionContext,
@@ -597,6 +601,9 @@ export async function docklessConnection(
 ): Promise<BaseSegment[] | null> {
   const policy = profile.policy(context),
     router = profile.router(context);
+  // On self-hosted walk and bicycle networks a device's routing spends no budget, and those
+  // networks are not cut off by the optional-stage window either: only a metered search needs calls left.
+  const free = docklessRoutingIsFree(context.provider);
   if (
     !docklessEnabled(context, preferences, profile.mode) ||
     !policy ||
@@ -604,7 +611,7 @@ export async function docklessConnection(
     !context.mobility ||
     !validPoint(from) ||
     !validPoint(to) ||
-    context.budget.remaining < 1
+    (!free && context.budget.remaining < 1)
   )
     return null;
   // A destination no ride of this kind may end near refuses every device alike (용산구 R21 for
@@ -687,9 +694,6 @@ export async function docklessConnection(
       .map(({ vehicle }) => vehicle);
   const { pickups, alternates } = mergePickups(ranked(usable).slice(0, ROUTER_DEVICES_PER_KIND));
   const nearby = ranked(pickups);
-  // On self-hosted walk and bicycle networks a device's routing spends no budget.
-  const free =
-    routeQueryIsFree(context.provider, 'walking') && routeQueryIsFree(context.provider, 'bicycle');
   const { order: candidates, looping } = free
     ? await networkOrder(context, nearby, from, to)
     : { order: nearby, looping: new Set<DocklessVehicle>() };
@@ -785,8 +789,9 @@ export async function docklessConnection(
       longitude: vehicle.longitude,
     };
     const dropoff = permission.dropoff;
-    const requiredCalls =
-      1 + (metersBetween(from, pickup) >= 1 ? 1 : 0) + (metersBetween(dropoff, to) >= 1 ? 1 : 0);
+    const requiredCalls = free
+      ? 0
+      : 1 + (metersBetween(from, pickup) >= 1 ? 1 : 0) + (metersBetween(dropoff, to) >= 1 ? 1 : 0);
     if (routedDevices >= ROUTED_DEVICES) return { status: 'capped' };
     if (context.budget.remaining < requiredCalls) return { status: 'budget' };
     routedDevices++;

@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Header, HttpCode, Inject, Post } from '@nestjs/common';
 import { ApiError } from '../../../common/engine/errors.js';
+import { OutdatedLearningConsentError } from '../domain/learning-receipt.js';
 import type { DeleteLearningDto, SubmitLearningDto } from '../dto/learning.dto.js';
 import { LearningService } from '../service/learning.service.js';
 
@@ -19,7 +20,11 @@ export class LearningController {
   async submit(@Body() body: SubmitLearningDto) {
     try {
       return await this.learning.submit(body);
-    } catch {
+    } catch (error) {
+      if (error instanceof OutdatedLearningConsentError) {
+        throw new ApiError('CONSENT_REQUIRED', error.message, 403);
+      }
+
       throw new ApiError(
         'INVALID_INPUT',
         '학습 기록의 동의·완료 시각·유효한 수집 정보를 확인해 주세요.',

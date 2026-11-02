@@ -1,0 +1,43 @@
+# Cloud Build trigger config for the model refresh job (push to main of the backend repository).
+# Builds model-refresh/Dockerfile, pushes it under the commit and 'latest', and points the existing job at the new image.
+# The job must exist first (deploy/model-refresh-job.sh creates it once). Trigger settings: docs/MODEL-REFRESH.md.
+# Not tested from this repository: the trigger itself lives in the Google Cloud project.
+substitutions:
+  _REGION: asia-northeast3
+  _REPO: jigak
+  _JOB: jigak-model-refresh
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - build
+      - -f
+      - model-refresh/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/jigak-model-refresh:$SHORT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/jigak-model-refresh:latest
+      - .
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/jigak-model-refresh
+  - id: update-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - update
+      - ${_JOB}
+      - --region
+      - ${_REGION}
+      - --image
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/jigak-model-refresh:$SHORT_SHA
+options:
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1800s

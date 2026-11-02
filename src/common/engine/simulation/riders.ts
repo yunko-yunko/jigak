@@ -14,6 +14,7 @@ import {
   kstHour,
   midnightOfIndex,
 } from './calendar.js';
+import { ringRange } from './destination-choice.js';
 import { PURPOSE, RIDER_STREAM, Stream } from './keyed-random.js';
 import {
   COS_LATITUDE,
@@ -285,8 +286,8 @@ export class Riders {
   private readonly parkingStream = new Stream();
   private readonly refusedStream = new Stream();
   private readonly overflowStream = new Stream();
-  /** Destination docks' weights for one draw (§5.3). */
-  private readonly nearWeights: number[] = [];
+  /** The destination ring of one draw, a CSR range of `spatial.destinations` (§22.10). */
+  private readonly ring = new Int32Array(2);
   private readonly crowd: (latitude: number, longitude: number) => number;
   private readonly full: (latitude: number, longitude: number) => boolean;
   /**
@@ -492,7 +493,10 @@ export class Riders {
     return Math.min(spec.rangeKm[1], Math.max(spec.rangeKm[0], km));
   }
 
-  /** §5.3 destination dock: the pair table, else a typical distance toward returning docks. */
+  /**
+   * §5.3 destination dock: the pair table, else a dock in a ring at the drawn trip distance by
+   * attraction × daily balance (§22.10). Both branches weight the targets by the balance.
+   */
   private destination(
     rider: Rider,
     stream: Stream,
@@ -500,7 +504,8 @@ export class Riders {
     hour: number,
   ): number {
     const e = this.e,
-      demand = e.demand;
+      demand = e.demand,
+      choice = e.spatial.destinations;
     const origin = rider.dock;
     const type = ASSUMPTIONS.riderTypes[rider.type];
     const originLat = demand.docks[origin * 2],
@@ -508,53 +513,39 @@ export class Riders {
     const from = demand.odStart[origin],
       to = demand.odStart[origin + 1];
     if (stream.next() < demand.odShare[origin] && to > from) {
+      const cumulative = choice.odCumulative[day];
       for (let attempt = 0; attempt <= ASSUMPTIONS.demand.maxDestinationRedraws; attempt++) {
-        const target = demand.odTo[stream.weightedSegment(demand.odCumulative, from, to)];
+        const target = demand.odTo[stream.weightedSegment(cumulative, from, to)];
         const km =
           e.meters(originLat, originLon, demand.docks[target * 2], demand.docks[target * 2 + 1]) /
           1000;
         if (km <= type.rangeKm[1]) return target;
       }
     }
-    // §22 trip ends lean to the foot mass too (`returnWeight`), fading from the drawn point.
-    const returns = e.spatial.returnWeight?.[day] ?? demand.ret[day];
-    const { returnWeightFloor, returnDecayMeters } = ASSUMPTIONS.demand;
-    const weights = this.nearWeights;
+    const weight = choice.weight[day],
+      near = choice.near,
+      range = this.ring;
     for (let attempt = 0; attempt < 3; attempt++) {
       const meters = this.typeDistance(stream, rider.type) * 1000;
-      const angle = stream.next() * 2 * Math.PI;
-      const lat = originLat + offsetLatitude(meters * Math.sin(angle)),
-        lon = originLon + offsetLongitude(meters * Math.cos(angle));
-      const docks = e.rules.docksNear(
-        lat,
-        lon,
-        ASSUMPTIONS.demand.destinationSearchMeters,
-        this.nearDocks,
-      );
-      let total = 0;
-      weights.length = 0;
-      for (const dock of docks) {
-        const weight =
-          dock === origin
-            ? 0
-            : (returns[dock * 24 + hour] + returnWeightFloor) *
-              Math.exp(
-                -metersApart(lat, lon, demand.docks[dock * 2], demand.docks[dock * 2 + 1]) /
-                  returnDecayMeters,
-              );
-        weights.push(weight);
-        total += weight;
-      }
-      const draw = stream.next() * total;
-      if (total <= 0) continue;
-      let running = 0;
-      for (let index = 0; index < docks.length; index++) {
-        if (docks[index] === origin) continue;
-        running += weights[index];
-        if (draw < running) return docks[index];
+      for (let widening = 0; widening < ASSUMPTIONS.demand.ringWidenings; widening++) {
+        if (!ringRange(choice, origin, meters, widening, range)) continue;
+        let total = 0;
+        for (let k = range[0]; k < range[1]; k++) total += weight[near[k] * 24 + hour];
+        if (total <= 0) continue;
+        const draw = stream.next() * total;
+        let running = 0;
+        for (let k = range[0]; k < range[1]; k++) {
+          running += weight[near[k] * 24 + hour];
+          if (draw < running) return near[k];
+        }
+        return near[range[1] - 1];
       }
     }
-    return to > from ? demand.odTo[from] : origin;
+    return to > from
+      ? demand.odTo[from]
+      : choice.start[origin + 1] > choice.start[origin]
+        ? near[choice.start[origin]]
+        : origin;
   }
 
   /**

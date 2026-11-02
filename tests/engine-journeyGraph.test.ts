@@ -1092,7 +1092,7 @@ test('different arrival clocks remain separate states and a later supplied faste
   }
 });
 
-test('a second rental is priced, not refused, and two leases keep their independent permissions', () => {
+test('a second rental is neither refused nor priced, and two leases keep their independent permissions', () => {
   const lease = (id: string, mode: 'bicycle' | 'scooter', start: Place, end: Place) =>
     source(id, [
       leg(`${id}-hire`, 'hire', start, start, 10, {
@@ -1114,8 +1114,8 @@ test('a second rental is priced, not refused, and two leases keep their independ
   ]);
   const hires = (route: BaseRoute) =>
     route.segments.filter((segment) => segment.mode === 'hire').length;
-  // A second rental is priced (the bus and the second hire add 120 s and 150 s to the ranking), not refused: the bicycle,
-  // bus and scooter chain takes 230 s against 1,200 s on foot, so it stays the fastest journey with ranking costs on.
+  // A second rental is neither refused nor priced (D1): the bicycle, bus and scooter chain takes 230 s against 1,200 s on
+  // foot, so it is the fastest journey with the walk comparisons on as well.
   const single = planJourneyGraph(request(), [first, middle, last, walking()], {
     receivedAt: NOW,
   });

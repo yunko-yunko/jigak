@@ -31,6 +31,10 @@ param(
   [ValidatePattern('^$|^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$')][string]$ModelBucket = '',
   # Extra gcsfuse mount options for that volume, ';' separated. Empty = Cloud Run defaults (verify options in the Cloud Run docs first).
   [ValidatePattern('^[A-Za-z0-9_=;.:-]*$')][string]$ModelMountOptions = '',
+  # Private Cloud Storage bucket (asia-northeast3) holding seoul-ngii-v1.pmtiles, mounted read-only at /maps. The API
+  # serves it by byte range at /api/maps/seoul-ngii-v1.pmtiles (MAP_NGII_PMTILES_PATH). NGII data may not leave Korea:
+  # never a public bucket, another region or a CDN.
+  [ValidatePattern('^$|^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$')][string]$MapBucket = '',
   [switch]$AllowUnauthenticated,
   [switch]$PlanOnly
 )
@@ -63,6 +67,15 @@ if (($SimulationWindowBucket -and $windowDirectory -ne '/sim-windows') -or (-not
 $manifestPath = if ($envText -match '(?m)^\s*MODEL_MANIFEST_PATH\s*:\s*[''"]?([^''"\r\n]*)[''"]?\s*$') { $Matches[1].Trim() } else { '' }
 if (($ModelBucket -and $manifestPath -ne '/models/manifest.json') -or (-not $ModelBucket -and $manifestPath)) {
   throw 'MODEL_MANIFEST_PATH must be /models/manifest.json exactly when -ModelBucket is given.'
+}
+
+$mapPath = if ($envText -match '(?m)^\s*MAP_NGII_PMTILES_PATH\s*:\s*[''"]?([^''"\r\n]*)[''"]?\s*$') { $Matches[1].Trim() } else { '' }
+if (($MapBucket -and $mapPath -ne '/maps/seoul-ngii-v1.pmtiles') -or (-not $MapBucket -and $mapPath)) {
+  throw 'MAP_NGII_PMTILES_PATH must be /maps/seoul-ngii-v1.pmtiles exactly when -MapBucket is given.'
+}
+# NGII survey data may not leave Korea: only a Seoul-region service may mount it.
+if ($MapBucket -and $Region -ne 'asia-northeast3') {
+  throw 'The NGII map (-MapBucket) is served only from asia-northeast3.'
 }
 
 $bindings = @{
@@ -153,6 +166,11 @@ if ($ModelBucket) {
   $modelVolume = "name=models,type=cloud-storage,bucket=$ModelBucket,readonly=true"
   if ($ModelMountOptions) { $modelVolume += ",mount-options=$ModelMountOptions" }
   $serviceArguments += @('--add-volume', $modelVolume, '--add-volume-mount', 'volume=models,mount-path=/models')
+}
+if ($MapBucket) {
+  # Read-only and private: only this service reads the NGII archive, one byte range per request.
+  $serviceArguments += @('--add-volume', "name=maps,type=cloud-storage,bucket=$MapBucket,readonly=true",
+    '--add-volume-mount', 'volume=maps,mount-path=/maps')
 }
 if ($AllowUnauthenticated) { $serviceArguments += '--allow-unauthenticated' }
 else { $serviceArguments += '--no-allow-unauthenticated' }

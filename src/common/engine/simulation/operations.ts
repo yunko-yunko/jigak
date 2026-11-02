@@ -1447,8 +1447,13 @@ export class Operations {
     let kind = -1,
       priority = 0;
     const current = this.fieldTask[vehicle] >= 0 ? this.tasks[this.fieldTask[vehicle]] : null;
-    if (op !== OP.LOW_BATTERY && op !== OP.BATTERY_DEAD && !e.has(vehicle, FLAG.BATTERY_MISSING))
+    // A wait set for one state ends with it (§22.10): the swap round of a pack that is no longer
+    // low, and any retry of a vehicle that left the street, no longer hold its next task back.
+    if (op !== OP.LOW_BATTERY && op !== OP.BATTERY_DEAD && !e.has(vehicle, FLAG.BATTERY_MISSING)) {
+      if (this.lowSince[vehicle] >= 0) e.taskRetryAt[vehicle] = 0;
       this.lowSince[vehicle] = -1;
+    }
+    if (!FIELD[op]) e.taskRetryAt[vehicle] = 0;
     if (op === OP.IMPOUNDED) {
       kind = TASK.IMPOUND;
       priority = 30;
@@ -2118,8 +2123,12 @@ export class Operations {
         ASSUMPTIONS.parking.reparkNudgeMeters,
         e.vType[vehicle],
       );
-      // §22.9 a patrol does not stack a re-parked vehicle onto a full spot (a 용산 zone) either.
-      if (this.crowd(this.place.latitude, this.place.longitude) > 0)
+      // §22.9 a patrol does not stack a re-parked vehicle onto a full spot (a 용산 zone) either,
+      // within its reach (§22.10: a step aside past `maxMeters` keeps the proper spot instead).
+      if (this.crowd(this.place.latitude, this.place.longitude) > 0) {
+        const spotLat = this.place.latitude,
+          spotLon = this.place.longitude,
+          spotDiscouraged = this.place.discouraged;
         e.rules.spreadSpot(
           e.vType[vehicle],
           stream.between(...ASSUMPTIONS.doors.spreadMeters),
@@ -2128,6 +2137,12 @@ export class Operations {
           this.place,
           this.crowd,
         );
+        if (e.meters(fromLat, fromLon, this.place.latitude, this.place.longitude) > maxMeters) {
+          this.place.latitude = spotLat;
+          this.place.longitude = spotLon;
+          this.place.discouraged = spotDiscouraged;
+        }
+      }
       e.enforcement.resolve(vehicle, time, RES.reparked);
       e.moveTo(vehicle, this.place.latitude, this.place.longitude);
       e.setFlag(vehicle, FLAG.FALLEN, false);
