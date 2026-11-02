@@ -4,6 +4,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { validateEnvironment } from '../config/environment.js';
 import { ApiExceptionFilter } from './api-exception.filter.js';
 import { RateLimitService } from './rate-limit.service.js';
+import { serveSite } from './site.js';
 import { ApiError } from '../errors.js';
 import { isMapArchivePath, mapArchiveCorsHeaders } from '../../modules/maps/domain/map-archive.js';
 
@@ -16,6 +17,9 @@ export function configureApplication(app: INestApplication, env: NodeJS.ProcessE
   server.set('trust proxy', config.TRUST_PROXY_HOPS || false);
 
   const allowed = new Set([...config.origins, new URL(config.AUTH_WEB_RETURN_URL).origin]);
+
+  // Before the API middleware: the website is same-origin, cacheable and not rate limited.
+  serveSite(app);
 
   app.use((request: Request, response: Response, next: NextFunction) => {
     response.setHeader('Cache-Control', 'no-store');

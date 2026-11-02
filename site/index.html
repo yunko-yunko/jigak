@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>지각지도</title>
+  <meta name="description" content="도착해야 하는 시각만 정하면 걷기, 따릉이, 킥보드, 버스, 지하철, 택시, 내 차를 이어 가장 먼저 도착하는 길을 찾아 주는 서울 길찾기 앱.">
+  <meta name="theme-color" content="#FFFFFF">
+  <meta property="og:title" content="지각지도">
+  <meta property="og:description" content="도착 시간부터 생각하는 길찾기">
+  <meta property="og:image" content="assets/icon.png">
+  <link rel="icon" href="assets/icon.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <link rel="stylesheet" href="styles.css?v=1102b">
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="mark" viewBox="22 4 76 110">
+        <path d="M60 15.5V26.5" stroke="currentColor" stroke-width="7" stroke-linecap="round"/>
+        <rect x="49.5" y="8.5" width="21" height="8.5" rx="4.25" fill="currentColor"/>
+        <path d="M81.92 36.08L87.29 30.71" stroke="currentColor" stroke-width="8" stroke-linecap="round"/>
+        <path d="M33.81 80.46A34.5 34.5 0 1 1 86.19 80.46L62.43 108.17A3.2 3.2 0 0 1 57.57 108.17ZM81.5 58A21.5 21.5 0 1 0 38.5 58A21.5 21.5 0 1 0 81.5 58Z" fill="currentColor" fill-rule="evenodd"/>
+        <path class="mark-hand" d="M60 58L67.25 45.44" stroke="var(--hand, #111317)" stroke-width="6.2" stroke-linecap="round"/>
+        <circle cx="60" cy="58" r="5.8" fill="var(--hand, #111317)"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <a class="skip" href="#main">본문으로 건너뛰기</a>
+
+  <header class="nav" id="nav">
+    <div class="nav-inner">
+      <a class="brand" href="#top" aria-label="지각지도 처음으로">
+        <svg class="brand-mark" aria-hidden="true"><use href="#mark"/></svg>
+        <span>지각지도</span>
+      </a>
+      <nav class="nav-links" aria-label="주요 메뉴">
+        <a href="#how">찾는 방식</a>
+        <a href="#modes">이동수단</a>
+        <a href="#live">실시간</a>
+        <a href="#guide">이동 안내</a>
+      </nav>
+      <a class="btn btn-small" href="#download">앱 받기</a>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- 1. Hero -->
+    <section class="hero" id="top">
+      <div class="hero-copy">
+        <p class="hero-eyebrow reveal">도착 시간부터 생각하는 길찾기</p>
+        <h1 class="hero-title">
+          <span class="line"><span>지각 안 하는</span></span>
+          <span class="line"><span>지도<em>.</em></span></span>
+        </h1>
+        <p class="hero-sub reveal">도착해야 하는 시각만 알려 주세요. 걷기, 따릉이, 킥보드, 버스, 지하철, 택시를 이어 붙여 가장 먼저 도착하는 길 하나를 바로 보여 줍니다.</p>
+        <div class="hero-actions reveal">
+          <a class="btn" href="#download">앱 받기</a>
+          <a class="link" href="#how">어떻게 찾는지 보기</a>
+        </div>
+      </div>
+
+      <div class="hero-stage" id="heroStage">
+        <div class="phone hero-phone" id="heroPhone">
+          <div class="screen">
+            <img src="assets/screens/home.jpg" alt="지각지도 홈 화면. 서울 시청 일대 지도 위에 출발 위치와 목적지 검색창이 있다." width="780" height="1688">
+            <div class="drop-pin" aria-hidden="true">
+              <svg><use href="#mark"/></svg>
+              <i class="drop-shadow"></i>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. Signature: the deadline scene -->
+    <section class="how" id="how" aria-label="찾는 방식">
+      <div class="how-sticky">
+        <div class="how-copy">
+          <p class="kicker">찾는 방식</p>
+          <div class="how-steps">
+            <article class="how-step is-active" data-step="0">
+              <h2>버스만 타면<br><span class="late">15분 늦습니다.</span></h2>
+              <p>집 앞 정류장에서 7분을 기다리고, 한 번에 가는 버스로 38분.</p>
+            </article>
+            <article class="how-step" data-step="1">
+              <h2>지하철로 바꿔도<br><span class="late">3분 늦습니다.</span></h2>
+              <p>열차는 빠르지만, 역까지 걷는 9분이 발목을 잡습니다.</p>
+            </article>
+            <article class="how-step" data-step="2">
+              <h2>섞으면<br><span class="ok">3분 먼저 도착합니다.</span></h2>
+              <p>역까지는 따릉이, 내려서는 킥보드. 지각지도는 이런 조합을 스스로 찾아서 이 길 하나만 보여 줍니다.</p>
+            </article>
+          </div>
+          <div class="how-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+        </div>
+
+        <figure class="board" aria-label="세 경로의 도착 시각 비교">
+          <div class="board-head">
+            <div class="bh-cell"><span>출발</span><b>08:21</b></div>
+            <div class="bh-cell bh-arrive"><span>도착</span><b id="arriveNum">09:15</b><em id="arriveDelta" class="late">15분 늦음</em></div>
+            <div class="bh-cell"><span>마감</span><b>09:00</b></div>
+          </div>
+
+          <div class="track">
+            <div class="axis" aria-hidden="true">
+              <span style="--t:0">08:20</span><span style="--t:1">08:30</span><span style="--t:2">08:40</span><span style="--t:3">08:50</span><span style="--t:4" class="ax-dl">09:00</span><span style="--t:5">09:10</span><span style="--t:6">09:20</span>
+            </div>
+            <div class="deadline" aria-hidden="true"><span>마감</span></div>
+
+            <div class="route" data-row="0">
+              <p class="route-name">버스만</p>
+              <div class="legs" style="--total:54">
+                <i class="leg walk" style="--m:4">걷기 4</i>
+                <i class="leg wait" style="--m:7">대기 7</i>
+                <i class="leg" style="--m:38;--c:#3D5BAB">간선버스 · 38분</i>
+                <i class="leg walk" style="--m:5">걷기 5</i>
+              </div>
+            </div>
+            <div class="route" data-row="1">
+              <p class="route-name">지하철만</p>
+              <div class="legs" style="--total:42">
+                <i class="leg walk" style="--m:9">걷기 9</i>
+                <i class="leg wait" style="--m:3">대기</i>
+                <i class="leg" style="--m:24;--c:#00A5DE">4호선 · 24분</i>
+                <i class="leg walk" style="--m:6">걷기 6</i>
+              </div>
+            </div>
+            <div class="route route-best" data-row="2">
+              <p class="route-name">지각지도</p>
+              <div class="legs" style="--total:36">
+                <i class="leg walk" style="--m:2">2</i>
+                <i class="leg" style="--m:5;--c:#2F9E6E">따릉이 5</i>
+                <i class="leg wait" style="--m:2"></i>
+                <i class="leg" style="--m:24;--c:#00A5DE">4호선 · 24분</i>
+                <i class="leg" style="--m:3;--c:#0FA59A">킥보드</i>
+              </div>
+            </div>
+          </div>
+          <figcaption>예시 시간으로 그린 화면입니다. 실제 시간은 그날의 도착 정보와 도로 상황으로 계산합니다.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- 3. Principles -->
+    <section class="principles" aria-labelledby="principlesTitle">
+      <h2 id="principlesTitle" class="section-title reveal">고르지 않아도<br>되도록.</h2>
+      <div class="principle-grid">
+        <article class="principle reveal">
+          <span class="p-index">01</span>
+          <h3>길은 하나만</h3>
+          <p>여러 후보를 비교하는 일은 앱이 합니다. 가장 먼저 도착하는 길을 골라 맨 위에 둡니다. 받아 든 사람은 출발만 하면 됩니다.</p>
+        </article>
+        <article class="principle reveal">
+          <span class="p-index">02</span>
+          <h3>기다림도 시간</h3>
+          <p>정류장 대기, 환승 걷기, 대여와 반납, 주차한 뒤 걷는 길까지 모두 도착 시각에 넣습니다. 지도 위 이동시간만 더하지 않습니다.</p>
+        </article>
+        <article class="principle reveal">
+          <span class="p-index">03</span>
+          <h3>뛸 이유가 없으면 걷게</h3>
+          <p>뛰어도 같은 열차를 탄다면 달리기를 권하지 않습니다. 놓칠 차를 잡을 수 있을 때만 달리는 구간을 넣습니다.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- 4. Modes -->
+    <section class="modes" id="modes" aria-labelledby="modesTitle">
+      <div class="section-head">
+        <p class="kicker reveal">이동수단</p>
+        <h2 id="modesTitle" class="section-title reveal">아홉 가지 탈것을<br>한 경로로.</h2>
+        <p class="section-sub reveal">수단마다 따로 검색하지 않습니다. 구간마다 가장 빠른 것을 골라 하나의 길로 잇습니다.</p>
+      </div>
+
+      <div class="mode-grid">
+        <article class="mode reveal" style="--c:#8A94A3">
+          <svg class="mode-line dotted" viewBox="0 0 300 90" aria-hidden="true"><path d="M10 70 C80 70 90 20 160 20 S250 60 290 30"/></svg>
+          <h3>걷기</h3>
+          <p>모든 연결의 처음과 끝. 실제 보행 경로와 횡단보도로 계산합니다.</p>
+        </article>
+        <article class="mode reveal" style="--c:#171A1F">
+          <svg class="mode-line" viewBox="0 0 300 90" aria-hidden="true"><path d="M10 60 L120 60 L170 25 L290 25"/></svg>
+          <h3>달리기</h3>
+          <p>뛰어서 앞 차를 탈 수 있을 때만 넣습니다. 길이는 설정한 한도 안에서.</p>
+        </article>
+        <article class="mode reveal" style="--c:#2F9E6E">
+          <svg class="mode-line" viewBox="0 0 300 90" aria-hidden="true"><path d="M10 30 C90 30 110 70 190 70 S270 40 290 40"/></svg>
+          <h3>따릉이</h3>
+          <p>대여소의 남은 자전거를 확인하고, 대여와 반납 시간까지 더합니다.</p>
+        </article>
+        <article class="mode reveal" style="--c:#7B2FF2">
+          <svg class="mode-line" viewBox="0 0 300 90" aria-hidden="true"><path d="M10 65 L80 65 C130 65 130 20 180 20 L290 20"/></svg>
+          <h3>공유 전기자전거</h3>
+          <p>반납할 수 있는 곳에서 끝나는 길만 씁니다. 언덕길에서 특히 빨라집니다.</p>
+        </article>
+        <article class="mode reveal" style="--c:#0FA59A">
+          <svg class="mode-line" viewBox="0 0 300 90" aria-hidden="true"><path d="M10 25 L100 25 L150 65 L290 65"/></svg>
+          <h3>공유 킥보드</h3>
+          <p>역에서 내려 목적지까지 남은 마지막 구간을 줄입니다.</p>
+        </article>
+        <article class="mode reveal" style="--c:#3D5BAB">
+          <svg class="mode-line thick" viewBox="0 0 300 90" aria-hidden="true"><path d="M10 45 L290 45"/></svg>
+          <h3>버스</h3>
+          <p>정류장 도착 정보로 지금 걸어가서 실제로 탈 수 있는 차를 고릅니다.</p>
+        </article>
+        <article class="mode mode-subway reveal">
+          <svg class="mode-line thick multi" viewBox="0 0 300 90" aria-hidden="true">
+            <path style="--c:#0052A4" d="M10 30 L290 30"/>
+            <path style="--c:#00A84D" d="M10 50 L290 50"/>
+            <path style="--c:#EF7C1C" d="M10 70 L290 70"/>
+          </svg>
+          <h3>지하철</h3>
+          <p>열차 도착과 환승 통로 걷기를 함께 계산해 갈아탈 역을 정합니다.</p>
+        </article>
+        <article class="mode reveal" style="--c:#E09A00">
+          <svg class="mode-line" viewBox="0 0 300 90" aria-hidden="true"><path d="M10 70 L60 70 L60 30 L200 30 L200 60 L290 60"/></svg>
+          <h3>택시</h3>
+          <p>남은 구간을 택시로 이었을 때 정말 빨라지는지 비교합니다.</p>
+        </article>
+        <article class="mode reveal" style="--c:#3B4452">
+          <svg class="mode-line" viewBox="0 0 300 90" aria-hidden="true"><path d="M10 45 L200 45"/><path class="tail" d="M200 45 L290 45"/></svg>
+          <h3>내 차</h3>
+          <p>저장한 차 위치에서 출발해 공영주차장에 세우고, 목적지까지 걷는 길로 잇습니다.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- 5. Live -->
+    <section class="live" id="live" aria-labelledby="liveTitle">
+      <div class="live-inner">
+        <div class="live-copy">
+          <p class="kicker">실시간</p>
+          <h2 id="liveTitle" class="section-title">지금 이 순간의<br>서울로 계산합니다.</h2>
+          <p class="section-sub">오래된 정보는 그대로 믿지 않습니다. 언제 받은 값인지, 어느 방향인지 확인하고, 확인할 수 없으면 추정값으로 바꿔 계산합니다.</p>
+          <ul class="feeds">
+            <li><b>버스</b><span>정류장별 도착 예정</span></li>
+            <li><b>지하철</b><span>역별 열차 도착</span></li>
+            <li><b>따릉이</b><span>대여소별 남은 자전거</span></li>
+            <li><b>공유 킥보드 · 전기자전거</b><span>주변 기기 위치</span></li>
+            <li><b>도로</b><span>소통, 사고, 공사</span></li>
+            <li><b>신호</b><span>교차로 신호 주기</span></li>
+            <li><b>날씨</b><span>비와 바람</span></li>
+            <li><b>주차</b><span>공영주차장</span></li>
+          </ul>
+        </div>
+        <div class="metro" aria-hidden="true">
+          <svg id="metro" viewBox="0 0 640 560">
+            <g class="m-lines">
+              <path data-c="#0052A4" d="M40 120 H230 L330 220 V520"/>
+              <path data-c="#00A84D" d="M120 320 V250 L200 170 H430 L510 250 V370 L450 430 H250 L170 430 L120 380 Z"/>
+              <path data-c="#00A5DE" d="M600 60 L430 230 H330 L230 330 V530"/>
+              <path data-c="#996CAC" d="M30 370 H120 L200 290 H600"/>
+              <path data-c="#EF7C1C" d="M500 530 L500 450 L450 400 V120 L400 70 H260"/>
+            </g>
+            <g class="m-trains"></g>
+            <g class="m-stations">
+              <circle cx="230" cy="120" r="9"/><circle cx="330" cy="220" r="9"/><circle cx="330" cy="290" r="9"/>
+              <circle cx="200" cy="170" r="9"/><circle cx="430" cy="230" r="9"/><circle cx="510" cy="290" r="9"/>
+              <circle cx="450" cy="430" r="9"/><circle cx="250" cy="430" r="9"/><circle cx="120" cy="370" r="9"/>
+              <circle cx="450" cy="170" r="9"/><circle cx="400" cy="70" r="9"/><circle cx="230" cy="330" r="9"/>
+              <circle cx="330" cy="430" r="9"/><circle cx="500" cy="480" r="9"/>
+            </g>
+          </svg>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. Guidance -->
+    <section class="guide" id="guide" aria-labelledby="guideTitle">
+      <div class="guide-inner">
+        <div class="phone guide-phone reveal">
+          <div class="screen ui">
+            <div class="ui-top">
+              <span class="ui-eta">08:57 도착</span>
+              <span class="ui-left">마감까지 3분 여유</span>
+            </div>
+            <div class="ui-progress"><i style="--w:38%"></i></div>
+            <div class="ui-now">
+              <span class="ui-badge" style="--c:#00A5DE">4</span>
+              <div>
+                <p class="ui-step">4호선 혜화역에서 타세요</p>
+                <p class="ui-hint">사당 방면 · 2분 뒤 도착</p>
+              </div>
+            </div>
+            <ol class="ui-next">
+              <li><i style="--c:#2F9E6E"></i><span>따릉이 반납</span><em>완료</em></li>
+              <li class="on"><i style="--c:#00A5DE"></i><span>4호선 7개 역</span><em>24분</em></li>
+              <li><i style="--c:#0FA59A"></i><span>킥보드로 목적지</span><em>3분</em></li>
+            </ol>
+            <svg class="ui-map" viewBox="0 0 300 150" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+              <path d="M0 50 H300 M0 110 H300 M70 0 V150 M190 0 V150" stroke="#fff" stroke-width="10"/>
+              <path class="r-walk" d="M30 125 L48 112"/>
+              <path class="r-bike" d="M48 112 L70 98 L70 70"/>
+              <path class="r-done" d="M70 70 L120 50 L150 50"/>
+              <path class="r-sub" d="M150 50 L190 50 L235 72"/>
+              <path class="r-kick" d="M235 72 L262 98"/>
+              <circle class="r-me" cx="150" cy="50" r="7"/>
+              <circle class="r-end" cx="262" cy="98" r="6"/>
+            </svg>
+            <div class="ui-dock">
+              <span>놓쳤어요</span>
+              <span>음성 끄기</span>
+            </div>
+          </div>
+        </div>
+        <div class="guide-copy">
+          <p class="kicker reveal">이동 안내</p>
+          <h2 id="guideTitle" class="section-title reveal">출발한 뒤에도<br>계속 다시 셉니다.</h2>
+          <dl class="guide-list">
+            <div class="reveal"><dt>지금 할 일 하나만</dt><dd>다음에 탈 것과 몇 분 뒤 오는지를 화면 가장 위에 크게 둡니다.</dd></div>
+            <div class="reveal"><dt>놓쳐도 바로 다음 길</dt><dd>“놓쳤어요”를 누르거나 경로를 벗어나면 지금 위치에서 다시 찾습니다.</dd></div>
+            <div class="reveal"><dt>보지 않아도 되게</dt><dd>갈아탈 곳과 내릴 곳을 음성으로 알려 줍니다.</dd></div>
+            <div class="reveal"><dt>제시간에 도착하면</dt><dd>도착을 확인하고, 마감 안에 들어왔는지 함께 보여 줍니다.</dd></div>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7. Bento -->
+    <section class="bento-wrap" aria-labelledby="bentoTitle">
+      <h2 id="bentoTitle" class="section-title reveal">나가기 전부터<br>도착할 때까지.</h2>
+      <div class="bento">
+        <article class="tile tile-alarm reveal">
+          <p class="t-label">도착 일정</p>
+          <p class="t-big"><span>08:19</span>에 나가세요</p>
+          <p class="t-body">약속 시각과 장소를 넣어 두면, 그날의 교통으로 나갈 때를 계산해 알려 줍니다.</p>
+        </article>
+        <article class="tile tile-prep reveal">
+          <p class="t-label">준비 시간</p>
+          <p class="t-big">신발 신는 <span>2분</span></p>
+          <p class="t-body">문을 나서기까지 걸리는 시간도 출발 시각에 넣습니다.</p>
+        </article>
+        <article class="tile tile-save reveal">
+          <p class="t-label">저장</p>
+          <ul class="t-places"><li>집</li><li>학교</li><li>회사</li></ul>
+          <p class="t-body">자주 가는 곳은 한 번 눌러 바로 찾습니다.</p>
+        </article>
+        <article class="tile tile-learn reveal">
+          <p class="t-label">더 정확해지는 도착 시간</p>
+          <p class="t-big">동의한 이동만<br>배웁니다</p>
+          <p class="t-body">선택해서 동의한 실제 이동 기록으로 예측 모델을 다시 학습하고, 검증을 통과한 모델만 도착 시간 계산에 씁니다.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- 8. Download -->
+    <section class="download" id="download" aria-labelledby="downloadTitle">
+      <div class="dl-mark" aria-hidden="true"><svg><use href="#mark"/></svg></div>
+      <h2 id="downloadTitle">늦을 것 같을 땐,<br>지각지도.</h2>
+      <p class="section-sub">iPhone과 Android 앱을 출시 준비하고 있습니다.</p>
+      <div class="stores">
+        <span class="store" aria-disabled="true"><b>App Store</b><small>출시 준비 중</small></span>
+        <span class="store" aria-disabled="true"><b>Google Play</b><small>출시 준비 중</small></span>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <div class="f-brand">
+        <svg class="brand-mark" aria-hidden="true"><use href="#mark"/></svg>
+        <span>지각지도</span>
+      </div>
+      <p class="f-org">울산작은고래지킴이협회 · 2026 디지털 콘텐츠 개발대회 생활 부문 출품작</p>
+      <nav class="f-links" aria-label="약관과 정책">
+        <a href="legal/terms.html">이용약관</a>
+        <a href="legal/privacy.html"><b>개인정보 처리방침</b></a>
+        <a href="legal/location.html">위치정보 이용 안내</a>
+        <a href="legal/licenses.html">오픈소스 및 출처</a>
+      </nav>
+      <p class="f-credit">지도 Protomaps © OpenStreetMap 기여자 · 국토지리정보원 · 서울특별시 공공데이터 · 기상청</p>
+    </div>
+  </footer>
+
+  <script src="main.js?v=1102b"></script>
+</body>
+</html>
