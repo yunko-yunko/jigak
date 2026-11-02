@@ -13,6 +13,7 @@ const source = (value: Provenance) => [
   value.sourceTimestamp,
   value.receivedAt,
   value.isRealtime,
+  value.simulated === true,
 ];
 
 /** Provider IDs are reused across queries. Compare the actual guidance geometry and timing. */
@@ -65,6 +66,8 @@ export function routeGuidanceSignature(route: Route): string {
       segment.publicEtaPrediction ?? null,
       segment.timetable ?? null,
       segment.scheduledConnection ?? null,
+      // Existing signatures stay byte-identical for segments without the subway envelope.
+      ...(segment.railEtaPrediction ? [segment.railEtaPrediction] : []),
     ]),
   ]);
 }

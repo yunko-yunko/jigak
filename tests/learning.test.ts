@@ -4,6 +4,7 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { Test } from '@nestjs/testing';
 import { createTestDatabase } from './helpers/auth-database.js';
+import { OutdatedLearningConsentError } from '../src/modules/learning/domain/learning-receipt.js';
 import { LearningRepository } from '../src/modules/learning/repository/learning.repository.js';
 import { LearningService } from '../src/modules/learning/service/learning.service.js';
 import { LearningController } from '../src/modules/learning/controller/learning.controller.js';
@@ -13,6 +14,9 @@ import {
 } from '../src/modules/learning/repository/entities/index.js';
 import { ApiExceptionFilter } from '../src/common/http/api-exception.filter.js';
 import { trainContextualEta } from '../src/common/engine/intelligence/contextual-training.js';
+import { learningFeaturesForRoute } from '../src/common/engine/intelligence/learning-features.js';
+import { WEATHER_CACHE_MS } from '../src/common/engine/realtime/weather.js';
+import type { BaseSegment, Place } from '../src/common/shared/domain/types.js';
 import {
   ETA_LEARNING_CONSENT_VERSION,
   type EtaLearningFeatures,
@@ -22,6 +26,7 @@ import {
   JOURNEY_MODES,
   type JourneyLearningFeatures,
 } from '../src/common/shared/intelligence/journeyLearning.js';
+import type { WeatherSnapshot } from '../src/common/shared/intelligence/types.js';
 
 const NOW = Date.UTC(2026, 9, 29, 3);
 function feature(startedAt = NOW): EtaLearningFeatures {
@@ -314,12 +319,15 @@ test('whole journeys include gaps, require expanded consent and delete atomicall
       },
     };
 
-    await assert.rejects(
-      h.store.submit({
-        ...complete,
-        consentVersion: 'eta-learning-v1',
-      }),
-    );
+    for (const consentVersion of ['eta-learning-v1', 'eta-learning-v2']) {
+      await assert.rejects(
+        h.store.submit({
+          ...complete,
+          consentVersion,
+        }),
+        OutdatedLearningConsentError,
+      );
+    }
     await assert.rejects(
       h.store.submit({
         ...complete,
@@ -391,6 +399,258 @@ test('older context is cleared and retention prunes observations after 90 days',
     clock += 91 * 86_400_000;
 
     assert.equal((await h.store.counts()).recordedSegments, 0);
+  } finally {
+    await h.close();
+  }
+});
+
+const place: Place = {
+  id: 'origin',
+  name: '출발',
+  address: '',
+  latitude: 37.5665,
+  longitude: 126.978,
+};
+const stage = (
+  id: string,
+  mode: BaseSegment['mode'],
+  seconds: number,
+  distanceMeters: number,
+): BaseSegment => ({
+  id,
+  mode,
+  title: id,
+  instructions: '',
+  start: place,
+  end: place,
+  distanceMeters,
+  durationSeconds: {
+    min: seconds,
+    max: seconds,
+  },
+  runAllowed: false,
+});
+const segments = [
+  stage('walk', 'walk', 90, 120),
+  stage('wait', 'wait', 30, 0),
+  stage('bus', 'bus', 180, 2000),
+  stage('walk2', 'walk', 60, 80),
+];
+const offsets = [0, 90, 120, 300];
+const weatherReceipt = (age: number): WeatherSnapshot => ({
+  source: 'kma-ultra-short',
+  status: 'live',
+  latitude: place.latitude,
+  longitude: place.longitude,
+  grid: {
+    x: 60,
+    y: 127,
+  },
+  temperatureC: 18,
+  precipitationMm: 2,
+  precipitationType: 1,
+  windMetersPerSecond: 2,
+  observedAt: NOW - 30 * 60_000,
+  receivedAt: NOW - age,
+  message: '',
+});
+const fields = (value: EtaLearningFeatures | null) => [
+  value?.precipitationMm ?? null,
+  value?.temperatureC ?? null,
+  value?.windMetersPerSecond ?? null,
+];
+
+test('the weather a ticket carries is the weather its trip stores when it departs as the ticket is issued', async (t) => {
+  let clock = NOW;
+
+  t.mock.method(Date, 'now', () => clock);
+
+  const h = await fixture();
+
+  try {
+    for (const age of [0, 300_000, WEATHER_CACHE_MS]) {
+      clock = NOW + 50;
+
+      const carried = learningFeaturesForRoute({ segments }, NOW, weatherReceipt(age));
+
+      assert.deepEqual(
+        carried.map(fields),
+        [
+          [2, 18, 2],
+          [2, 18, 2],
+          [2, 18, 2],
+          [null, null, null],
+        ],
+        `ticket, receipt age ${age}`,
+      );
+
+      const ticket = h.store.issueTicket(carried);
+
+      clock = NOW + 600_000;
+
+      const { deletionToken } = await h.store.submit({
+        ticket,
+        consentVersion: ETA_LEARNING_CONSENT_VERSION,
+        samples: offsets.map((offset, segmentIndex) => ({
+          segmentIndex,
+          startedAt: NOW + offset * 1000,
+          endedAt: NOW + (offset + segments[segmentIndex].durationSeconds.max) * 1000,
+          evidence: 'user-confirmed',
+        })),
+      });
+
+      assert.deepEqual(
+        (await h.store.observations()).map((row) => fields(row.features)),
+        carried.map(fields),
+        `receipt age ${age}`,
+      );
+      assert.equal(await h.store.erase(deletionToken), segments.length);
+    }
+
+    const walkThenBus = [stage('walk', 'walk', 100, 120), stage('bus', 'bus', 180, 2000)];
+
+    for (const [busStart, stored] of [
+      [
+        120_000,
+        [
+          [2, 18, 2],
+          [2, 18, 2],
+        ],
+      ],
+      [
+        121_000,
+        [
+          [2, 18, 2],
+          [null, null, null],
+        ],
+      ],
+    ] as const) {
+      clock = NOW;
+
+      const carried = learningFeaturesForRoute({ segments: walkThenBus }, NOW, weatherReceipt(0));
+
+      assert.deepEqual(
+        carried.map(fields),
+        [
+          [2, 18, 2],
+          [2, 18, 2],
+        ],
+        'ticket, bus planned 100 seconds after the search',
+      );
+
+      const ticket = h.store.issueTicket(carried);
+
+      clock = NOW + 900_000;
+
+      const { deletionToken } = await h.store.submit({
+        ticket,
+        consentVersion: ETA_LEARNING_CONSENT_VERSION,
+        samples: [
+          {
+            segmentIndex: 0,
+            startedAt: NOW,
+            endedAt: NOW + busStart,
+            evidence: 'user-confirmed',
+          },
+          {
+            segmentIndex: 1,
+            startedAt: NOW + busStart,
+            endedAt: NOW + busStart + 180_000,
+            evidence: 'user-confirmed',
+          },
+        ],
+      });
+
+      assert.deepEqual(
+        (await h.store.observations()).map((row) => fields(row.features)),
+        stored,
+        `bus planned 100 seconds after the ticket, started ${busStart / 1000} seconds after it`,
+      );
+      assert.equal(await h.store.erase(deletionToken), walkThenBus.length);
+    }
+  } finally {
+    await h.close();
+  }
+});
+
+test('the store judges ticket weather by actual start minus ticket issue time, so a trip that departs a second after issue drops it from the stage planned two minutes in', async (t) => {
+  let clock = NOW;
+
+  t.mock.method(Date, 'now', () => clock);
+
+  const h = await fixture();
+
+  try {
+    const carried = learningFeaturesForRoute({ segments }, NOW, weatherReceipt(0));
+
+    assert.deepEqual(
+      carried.map(fields),
+      [
+        [2, 18, 2],
+        [2, 18, 2],
+        [2, 18, 2],
+        [null, null, null],
+      ],
+      'ticket',
+    );
+
+    for (const [issued, departure, stored] of [
+      [
+        0,
+        0,
+        [
+          [2, 18, 2],
+          [2, 18, 2],
+          [2, 18, 2],
+          [null, null, null],
+        ],
+      ],
+      [
+        0,
+        1_000,
+        [
+          [2, 18, 2],
+          [2, 18, 2],
+          [null, null, null],
+          [null, null, null],
+        ],
+      ],
+      [
+        2_000,
+        0,
+        [
+          [2, 18, 2],
+          [2, 18, 2],
+          [2, 18, 2],
+          [null, null, null],
+        ],
+      ],
+    ] as const) {
+      clock = NOW + issued;
+
+      const ticket = h.store.issueTicket(carried);
+
+      clock = NOW + 600_000;
+
+      const { deletionToken } = await h.store.submit({
+        ticket,
+        consentVersion: ETA_LEARNING_CONSENT_VERSION,
+        samples: offsets.map((offset, segmentIndex) => ({
+          segmentIndex,
+          startedAt: NOW + issued + departure + offset * 1000,
+          endedAt:
+            NOW + issued + departure + (offset + segments[segmentIndex].durationSeconds.max) * 1000,
+          evidence: 'user-confirmed',
+        })),
+      });
+
+      assert.deepEqual(
+        (await h.store.observations()).map((row) => fields(row.features)),
+        stored,
+        `issued ${issued / 1000} s after the search, departed ${departure / 1000} s after the ticket was issued`,
+      );
+      assert.equal(await h.store.erase(deletionToken), segments.length);
+    }
   } finally {
     await h.close();
   }
@@ -651,6 +911,17 @@ test('Nest learning HTTP endpoints preserve paths, success status, consent error
 
     assert.equal(bad.status, 400);
     assert.equal((await bad.json()).error.code, 'INVALID_INPUT');
+
+    // Old app builds still send opt-ins given under an older text: refused with their own code, never relabelled.
+    for (const consentVersion of ['eta-learning-v1', 'eta-learning-v2']) {
+      const refused = await send({ ...body(ticket), consentVersion });
+
+      assert.equal(refused.status, 403);
+      assert.equal((await refused.json()).error.code, 'CONSENT_REQUIRED');
+    }
+
+    assert.equal((await h.store.observations()).length, 0);
+    assert.equal(ETA_LEARNING_CONSENT_VERSION, 'eta-learning-v3');
 
     const response = await send(body(ticket));
 

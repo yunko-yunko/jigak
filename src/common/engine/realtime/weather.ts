@@ -16,6 +16,19 @@ type Point = {
   longitude: number;
 };
 
+/** One grid cell's observation, shared by every request in that cell; each response adds only its requester's coordinates. */
+type GridWeather = Omit<WeatherSnapshot, 'latitude' | 'longitude'>;
+
+function located({ source, status, ...observation }: GridWeather, point: Point): WeatherSnapshot {
+  return {
+    source,
+    status,
+    latitude: point.latitude,
+    longitude: point.longitude,
+    ...observation,
+  };
+}
+
 /** KMA DFS Lambert conformal conic grid, 5 km (standard parallels 30°/60°, origin 126°/38°). */
 export function kmaGrid(point: Point): {
   x: number;
@@ -69,6 +82,10 @@ export function parseKmaWeather(
   point: Point,
   receivedAt: number,
 ): WeatherSnapshot {
+  return located(parseKmaObservation(payload, point, receivedAt), point);
+}
+
+function parseKmaObservation(payload: unknown, point: Point, receivedAt: number): GridWeather {
   const response = (
     payload as {
       response?: {
@@ -173,7 +190,6 @@ export function parseKmaWeather(
   return {
     source: 'kma-ultra-short',
     status: stale ? 'stale' : 'live',
-    ...point,
     grid,
     temperatureC,
     precipitationMm,
@@ -187,6 +203,11 @@ export function parseKmaWeather(
   };
 }
 
+/** One KMA observation per grid and base hour is reused this long, so a receipt this old is still the latest one. */
+export const WEATHER_CACHE_MS = 10 * 60_000;
+/** A search reads the weather when it starts and judges it when it finishes, so the last receipt the cache serves stays usable through a search of up to a minute. */
+export const WEATHER_RECEIPT_MAX_AGE_MS = WEATHER_CACHE_MS + 60_000;
+
 export class WeatherFeed {
   private readonly key: string;
   private readonly now: () => number;
@@ -194,7 +215,7 @@ export class WeatherFeed {
     string,
     {
       until: number;
-      value: Promise<WeatherSnapshot>;
+      value: Promise<GridWeather>;
     }
   >();
   lastFailure: FeedError['reason'] | null = null;
@@ -217,13 +238,9 @@ export class WeatherFeed {
     const now = this.now();
     let grid: WeatherSnapshot['grid'] = null;
 
-    const absent = (
-      status: 'unconfigured' | 'unavailable',
-      receivedAt: number,
-    ): WeatherSnapshot => ({
+    const absent = (status: 'unconfigured' | 'unavailable', receivedAt: number): GridWeather => ({
       source: 'kma-ultra-short',
       status,
-      ...point,
       grid,
       temperatureC: null,
       precipitationMm: null,
@@ -240,14 +257,17 @@ export class WeatherFeed {
     try {
       grid = kmaGrid(point);
     } catch {
-      return {
-        ...absent('unavailable', now),
-        message: '기상청 관측의 지원 지역 밖입니다. 날씨를 임의로 추정하지 않습니다.',
-      };
+      return located(
+        {
+          ...absent('unavailable', now),
+          message: '기상청 관측의 지원 지역 밖입니다. 날씨를 임의로 추정하지 않습니다.',
+        },
+        point,
+      );
     }
 
     if (!this.configured) {
-      return absent('unconfigured', now);
+      return located(absent('unconfigured', now), point);
     }
 
     const base = kmaObservationBase(now),
@@ -255,7 +275,7 @@ export class WeatherFeed {
     const hit = this.cache.get(cacheKey);
 
     if (hit && hit.until > now) {
-      return hit.value;
+      return located(await hit.value, point);
     }
 
     const url = new URL(
@@ -275,7 +295,7 @@ export class WeatherFeed {
 
     const value = fetchFeedJson(url, this.options)
       .then((raw) => {
-        const result = parseKmaWeather(raw, point, this.now());
+        const result = parseKmaObservation(raw, point, this.now());
 
         this.lastFailure = null;
 
@@ -294,7 +314,7 @@ export class WeatherFeed {
       });
 
     this.cache.set(cacheKey, {
-      until: now + 10 * 60_000,
+      until: now + WEATHER_CACHE_MS,
       value,
     });
 
@@ -303,6 +323,6 @@ export class WeatherFeed {
       this.cache.delete(this.cache.keys().next().value!);
     }
 
-    return value;
+    return located(await value, point);
   }
 }

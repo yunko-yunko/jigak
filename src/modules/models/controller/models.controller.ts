@@ -10,6 +10,17 @@ export class ModelsController {
     return this.models.bus();
   }
 
+  /** Every served model plus the refresh job's state (manifest, last run, next run, retries). */
+  @Get()
+  all() {
+    return this.models.all();
+  }
+
+  @Get('refresh')
+  refresh() {
+    return this.models.refresh();
+  }
+
   @Get('public-bicycle')
   bicycle() {
     return this.models.bicycle();

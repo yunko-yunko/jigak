@@ -7,6 +7,7 @@ import { createOAuthAdapters, socialConfigFromEnvironment } from '../domain/oaut
 import { randomToken, safeEqual, safeWebUrl } from '../domain/security.js';
 import {
   CONSENT_VERSION,
+  OUTDATED_CONSENT_MESSAGE,
   SOCIAL_PROVIDERS,
   type AuthPlatform,
   type OAuthAdapter,
@@ -17,6 +18,7 @@ import {
   deleteAccountSchema,
   exchangeSchema,
   nameSchema,
+  outdatedConsentSchema,
   parse,
   preferenceSchema,
   startSchema,
@@ -334,8 +336,13 @@ export class AuthService {
   }
 
   async consents(request: Request) {
-    const { session } = await this.authenticate(request, true, true),
-      input = parse(consentSchema, request.body, '필수 이용약관과 개인정보 동의를 확인해 주세요.');
+    const { session } = await this.authenticate(request, true, true);
+
+    if (outdatedConsentSchema.safeParse(request.body).success) {
+      throw new ApiError('CONSENT_REQUIRED', OUTDATED_CONSENT_MESSAGE, 403);
+    }
+
+    const input = parse(consentSchema, request.body, '필수 이용약관과 개인정보 동의를 확인해 주세요.');
 
     return {
       user: await this.repository.acceptConsents(session.userId, input.marketingConsent),

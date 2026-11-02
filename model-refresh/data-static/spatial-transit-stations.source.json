@@ -1,0 +1,12 @@
+{
+  "version": "spatial-transit-station-acquisition-v1",
+  "sourcePage": "https://t-data.seoul.go.kr/dataprovide/trafficdataviewfile.do?data_id=36",
+  "downloadUrl": "https://t-data.seoul.go.kr/dataprovide/download.do?id=10229",
+  "retrievedAt": "2026-10-29T09:08:18.855431+00:00",
+  "sourcePageSha256": "47e3d03924a366bb51b182e51cb605569cc4dde09c05c3a94d7bedee0cbe42c4",
+  "sha256": "f6a1eb4282660041ce791ef9391848f320a3b8f7ea7ffbd4365372ea6e5b1608",
+  "bytes": 38362,
+  "rows": 784,
+  "coordinateVintage": "current-snapshot-historical-vintage-unverified",
+  "license": "CC BY; Seoul T-DATA / TAIMS"
+}

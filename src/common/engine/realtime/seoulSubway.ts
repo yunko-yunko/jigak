@@ -1,5 +1,6 @@
 import type { ArrivalPrediction } from '../../shared/domain/types.js';
 import { asArray, fetchFeedJson, FeedError, finiteNumber, text, type FeedOptions } from './http.js';
+import { ServiceKeyPool } from './key-pool.js';
 import { parseArrivalPhrase, stationBaseName, subwayLineId, subwayLineName } from './names.js';
 
 /** One normalized train approaching a station, before line/direction filtering. */
@@ -102,8 +103,13 @@ export function parseSubwayRows(
     return 'not-found';
   }
 
-  if (code === 'INFO-100' || code === 'ERROR-337') {
+  if (code === 'INFO-100') {
     throw new FeedError('auth');
+  }
+
+  // ERROR-337: the key's daily traffic is spent until 00:00 KST.
+  if (code === 'ERROR-337') {
+    throw new FeedError('quota');
   }
 
   if (code && !code.startsWith('INFO-000')) {
@@ -298,13 +304,18 @@ export function selectSubwayArrivals(
 }
 
 export class SeoulSubwayFeed {
+  private readonly keys: ServiceKeyPool;
+
+  /** A spare key (SEOUL_OPEN_API_KEY_FALLBACK) takes over once the first key's daily traffic is spent. */
   constructor(
-    private readonly key: string,
+    key: string | ServiceKeyPool,
     private readonly options: FeedOptions = {},
-  ) {}
+  ) {
+    this.keys = key instanceof ServiceKeyPool ? key : new ServiceKeyPool([key]);
+  }
 
   get configured() {
-    return !!this.key;
+    return this.keys.configured;
   }
 
   /** Tries the plain station name first, then the provider's full name with its parenthetical. */
@@ -314,11 +325,17 @@ export class SeoulSubwayFeed {
     ];
 
     for (const candidate of candidates) {
-      const url = new URL(
-        `http://swopenapi.seoul.go.kr/api/subway/${encodeURIComponent(this.key)}/json/realtimeStationArrival/0/60/${encodeURIComponent(candidate)}`,
+      const rows = await this.keys.call('realtimeStationArrival', 'guidance', async (key) =>
+        parseSubwayRows(
+          await fetchFeedJson(
+            new URL(
+              `http://swopenapi.seoul.go.kr/api/subway/${encodeURIComponent(key)}/json/realtimeStationArrival/0/60/${encodeURIComponent(candidate)}`,
+            ),
+            this.options,
+          ),
+          now,
+        ),
       );
-
-      const rows = parseSubwayRows(await fetchFeedJson(url, this.options), now);
 
       if (rows !== 'not-found') {
         return rows;

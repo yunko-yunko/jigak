@@ -17,9 +17,12 @@ export interface RentalAvailabilityInput {
   capabilities: {
     bicycleFeed: boolean;
     scooterFeed: boolean;
+    ebikeFeed: boolean;
     bicycleRouter: boolean;
     scooterRouter: boolean;
+    ebikeRouter: boolean;
     scooterRentalPolicy: boolean;
+    ebikeRentalPolicy: boolean;
   };
   diagnostics?: {
     failures?: readonly {
@@ -29,14 +32,43 @@ export interface RentalAvailabilityInput {
     limitReached?: boolean;
     budgetSkipped?: number;
     candidateLimitSkipped?: number;
+    /** Per rental kind: candidates, devices and calls left out for that kind. When given it replaces the aggregate
+     * limit, budget and candidate signals, so one kind's omitted devices never mark another kind search-limited. */
+    candidateLimitSkippedByMode?: Partial<Record<RentalMode, number>>;
+    /** Per rental kind: rentals to the destination refused because no legal return spot lies
+     * within a walk of it. */
+    returnBlockedByMode?: Partial<Record<RentalMode, number>>;
   };
   /** Mode-specific missing inventory evidence; aggregate rental failure counts cannot identify it. */
   unavailableSupply?: readonly RentalMode[];
 }
 
+/** Dockless kinds need an operator policy; 따릉이 is a docked station hire with its own proof. */
+const DOCKLESS: ReadonlySet<RentalMode> = new Set(['scooter', 'ebike']);
+
 /** Explain this search's evidence without treating configured credentials as a live integration. */
 export function rentalAvailabilityForSearch(input: RentalAvailabilityInput): RentalAvailability {
   const { preferences, capabilities, diagnostics } = input;
+
+  const feed = {
+    bicycle: capabilities.bicycleFeed,
+    ebike: capabilities.ebikeFeed,
+    scooter: capabilities.scooterFeed,
+  };
+  const router = {
+    bicycle: capabilities.bicycleRouter,
+    ebike: capabilities.ebikeRouter,
+    scooter: capabilities.scooterRouter,
+  };
+  const policy = {
+    ebike: capabilities.ebikeRentalPolicy,
+    scooter: capabilities.scooterRentalPolicy,
+  };
+  const allowed = {
+    bicycle: preferences.allowBicycle,
+    ebike: preferences.allowEbike !== false,
+    scooter: preferences.allowScooter !== false,
+  };
 
   const entry = (mode: RentalMode): RentalAvailabilityEntry => {
     if (preferences.walkingOnly) {
@@ -46,10 +78,18 @@ export function rentalAvailabilityForSearch(input: RentalAvailabilityInput): Ren
       };
     }
 
-    if (mode === 'bicycle' ? !preferences.allowBicycle : preferences.allowScooter === false) {
+    if (!allowed[mode]) {
       return {
         status: 'excluded',
         reason: 'disabled',
+      };
+    }
+
+    // Kick-scooters need a 원동기장치자전거 licence; only an explicit false withholds them.
+    if (mode === 'scooter' && preferences.hasScooterLicense === false) {
+      return {
+        status: 'not-found',
+        reason: 'license-unconfirmed',
       };
     }
 
@@ -60,21 +100,21 @@ export function rentalAvailabilityForSearch(input: RentalAvailabilityInput): Ren
       };
     }
 
-    if (!(mode === 'bicycle' ? capabilities.bicycleRouter : capabilities.scooterRouter)) {
+    if (!router[mode]) {
       return {
         status: 'unavailable',
         reason: 'unconfigured-router',
       };
     }
 
-    if (mode === 'scooter' && !capabilities.scooterRentalPolicy) {
+    if (DOCKLESS.has(mode) && !policy[mode as 'ebike' | 'scooter']) {
       return {
         status: 'unavailable',
         reason: 'unconfigured-rental-policy',
       };
     }
 
-    if (!(mode === 'bicycle' ? capabilities.bicycleFeed : capabilities.scooterFeed)) {
+    if (!feed[mode]) {
       return {
         status: 'unavailable',
         reason: 'unconfigured-feed',
@@ -100,13 +140,23 @@ export function rentalAvailabilityForSearch(input: RentalAvailabilityInput): Ren
     }
 
     if (
-      diagnostics?.limitReached ||
-      (diagnostics?.budgetSkipped ?? 0) > 0 ||
-      (diagnostics?.candidateLimitSkipped ?? 0) > 0
+      diagnostics?.candidateLimitSkippedByMode
+        ? (diagnostics.candidateLimitSkippedByMode[mode] ?? 0) > 0
+        : diagnostics?.limitReached ||
+          (diagnostics?.budgetSkipped ?? 0) > 0 ||
+          (diagnostics?.candidateLimitSkipped ?? 0) > 0
     ) {
       return {
         status: 'not-found',
         reason: 'search-limited',
+      };
+    }
+
+    // Every ride of this kind would have to end where it may not be parked, or too far to walk on.
+    if ((diagnostics?.returnBlockedByMode?.[mode] ?? 0) > 0) {
+      return {
+        status: 'not-found',
+        reason: 'no-legal-return',
       };
     }
 

@@ -18,15 +18,8 @@ import { DEFAULT_PREFERENCES } from '../src/common/shared/domain/index.js';
 import { planJourneyGraph } from '../src/common/engine/journey-graph.js';
 
 const NOW = Date.UTC(2026, 9, 15, 6);
-
 const request: RouteEndpoints = {
-  origin: {
-    id: 'origin',
-    name: '서울역',
-    address: '',
-    latitude: 37.5547,
-    longitude: 126.9707,
-  },
+  origin: { id: 'origin', name: '서울역', address: '', latitude: 37.5547, longitude: 126.9707 },
   destination: {
     id: 'destination',
     name: '서울시청',
@@ -35,34 +28,21 @@ const request: RouteEndpoints = {
     longitude: 126.9779,
   },
 };
-
 const START = [126.9707, 37.5548],
   MIDDLE = [126.974, 37.56],
   END = [126.9779, 37.5662];
-
 const fixture = () => ({
   code: 'Ok',
   data_version: '2026-10-14T00:00:00Z',
   waypoints: [
-    {
-      distance: 10,
-      location: [...START],
-      name: '',
-    },
-    {
-      distance: 10,
-      location: [...END],
-      name: '',
-    },
+    { distance: 10, location: [...START], name: '' },
+    { distance: 10, location: [...END], name: '' },
   ],
   routes: [
     {
       distance: 1500.2,
       duration: 1234.4,
-      geometry: {
-        type: 'LineString',
-        coordinates: [[...START], [...MIDDLE], [...END]],
-      },
+      geometry: { type: 'LineString', coordinates: [[...START], [...MIDDLE], [...END]] },
       legs: [
         {
           distance: 1500.2,
@@ -73,43 +53,24 @@ const fixture = () => ({
               name: '서울역광장',
               distance: 700,
               duration: 700,
-              geometry: {
-                type: 'LineString',
-                coordinates: [[...START], [...MIDDLE]],
-              },
-              maneuver: {
-                type: 'depart',
-                location: [...START],
-              },
+              geometry: { type: 'LineString', coordinates: [[...START], [...MIDDLE]] },
+              maneuver: { type: 'depart', location: [...START] },
             },
             {
               mode: 'walking',
               name: '세종대로',
               distance: 800.2,
               duration: 534.4,
-              geometry: {
-                type: 'LineString',
-                coordinates: [[...MIDDLE], [...END]],
-              },
-              maneuver: {
-                type: 'turn',
-                modifier: 'left',
-                location: [...MIDDLE],
-              },
+              geometry: { type: 'LineString', coordinates: [[...MIDDLE], [...END]] },
+              maneuver: { type: 'turn', modifier: 'left', location: [...MIDDLE] },
             },
             {
               mode: 'walking',
               name: '',
               distance: 0,
               duration: 0,
-              geometry: {
-                type: 'LineString',
-                coordinates: [[...END], [...END]],
-              },
-              maneuver: {
-                type: 'arrive',
-                location: [...END],
-              },
+              geometry: { type: 'LineString', coordinates: [[...END], [...END]] },
+              maneuver: { type: 'arrive', location: [...END] },
             },
           ],
         },
@@ -117,49 +78,27 @@ const fixture = () => ({
     },
   ],
 });
-
 const reply = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-    },
-  });
-
+  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const ownEndpoint = 'https://foot.my-service.co.kr/route/v1/foot';
-
 const noDelay = async () => {};
-
 const code = (expected: ApiError['code']) => (error: unknown) =>
   error instanceof ApiError && error.code === expected;
-
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => {
     resolve = done;
   });
-
-  return {
-    promise,
-    resolve,
-  };
+  return { promise, resolve };
 };
 
 const alternativesFixture = () => {
   const payload = fixture();
-
   for (const { duration, midpoint } of [
-    {
-      duration: 1000,
-      midpoint: [126.975, 37.5595],
-    },
-    {
-      duration: 1100,
-      midpoint: [126.9745, 37.561],
-    },
+    { duration: 1000, midpoint: [126.975, 37.5595] },
+    { duration: 1100, midpoint: [126.9745, 37.561] },
   ]) {
     const alternative = structuredClone(payload.routes[0]);
-
     alternative.duration = duration;
     alternative.legs[0].duration = duration;
     alternative.geometry.coordinates[1] = midpoint;
@@ -168,10 +107,8 @@ const alternativesFixture = () => {
     alternative.legs[0].steps[1].duration = duration / 2;
     alternative.legs[0].steps[1].geometry.coordinates[0] = midpoint;
     alternative.legs[0].steps[1].maneuver.location = midpoint;
-
     payload.routes.push(alternative);
   }
-
   return payload;
 };
 
@@ -184,21 +121,15 @@ test('a faster second pedestrian alternative reaches journey comparison and surv
     now: () => now,
     fetcher: async (input) => {
       calls++;
-
       const alternatives = Number(new URL(String(input)).searchParams.get('alternatives'));
       const payload = alternativesFixture();
-
       // The external source only returns the requested alternatives.
-      if (alternatives < 1 || !Number.isFinite(alternatives)) {
+      if (alternatives < 1 || !Number.isFinite(alternatives))
         payload.routes = payload.routes.slice(0, 1);
-      } else if (!Number.isInteger(alternatives) || alternatives > 2) {
+      else if (!Number.isInteger(alternatives) || alternatives > 2)
         throw new Error('request exceeds the bounded three-route comparison');
-      } else {
-        payload.routes = payload.routes.slice(0, alternatives + 1);
-      }
-
+      else payload.routes = payload.routes.slice(0, alternatives + 1);
       await response.promise;
-
       return reply(payload);
     },
   });
@@ -206,35 +137,21 @@ test('a faster second pedestrian alternative reaches journey comparison and surv
     sharedBudget = new CallBudget(1);
   const first = router.walking(request, firstBudget),
     shared = router.walking(request, sharedBudget);
-
   response.resolve();
-
   const [routes, sharedRoutes] = await Promise.all([first, shared]);
-
   const planned = planJourneyGraph(
     {
       ...request,
       now: NOW,
       deadline: NOW + 3600_000,
-      preferences: {
-        ...DEFAULT_PREFERENCES,
-        allowRunning: false,
-        preparationSeconds: 0,
-      },
+      preferences: { ...DEFAULT_PREFERENCES, allowRunning: false, preparationSeconds: 0 },
     },
     routes,
-    {
-      receivedAt: NOW,
-      maxResults: 1,
-    },
+    { receivedAt: NOW, maxResults: 1 },
   );
-
   assert.deepEqual(
     planned.routes[0]?.durationSeconds,
-    {
-      min: 1000,
-      max: 1023,
-    },
+    { min: 1000, max: 1023 },
     'source recommendation order must not suppress a faster valid foot path',
   );
   assert.deepEqual(
@@ -247,18 +164,9 @@ test('a faster second pedestrian alternative reaches journey comparison and surv
   assert.deepEqual(
     routes.map((route) => route.durationSeconds),
     [
-      {
-        min: 1235,
-        max: 1258,
-      },
-      {
-        min: 1000,
-        max: 1023,
-      },
-      {
-        min: 1100,
-        max: 1123,
-      },
+      { min: 1235, max: 1258 },
+      { min: 1000, max: 1023 },
+      { min: 1100, max: 1123 },
     ],
     'all three valid source paths remain available to downstream comparisons',
   );
@@ -268,46 +176,32 @@ test('a faster second pedestrian alternative reaches journey comparison and surv
     'different alternatives must not overwrite each other in consumers keyed by route ID',
   );
   assert.deepEqual(sharedRoutes, routes);
-
   routes[1].segments[0].polyline![1].latitude = 0;
   routes[1].segments[0].routingSource!.receivedAt = 0;
-
   assert.equal(
     sharedRoutes[1].segments[0].polyline![1].latitude,
     37.5595,
     'coalesced callers own independent route data',
   );
-
   now += 120_000;
-
   const cacheBudget = new CallBudget(1);
-
   const cached = await router.walking(
     {
-      origin: {
-        ...request.origin,
-        name: '현재 위치',
-      },
-      destination: {
-        ...request.destination,
-        name: '약속 장소',
-      },
+      origin: { ...request.origin, name: '현재 위치' },
+      destination: { ...request.destination, name: '약속 장소' },
     },
     cacheBudget,
   );
-
   assert.deepEqual(
     cached.map((route) => route.id),
     sharedRoutes.map((route) => route.id),
   );
-
   for (const route of cached) {
     assert.equal(route.segments[0].start.name, '현재 위치');
     assert.equal(route.segments[0].end.name, '약속 장소');
     assert.equal(route.segments[0].routingSource?.receivedAt, NOW);
     assert.equal(route.segments[0].routingSource?.provider, 'osrm-foot');
   }
-
   assert.equal(cached[1].segments[0].polyline![1].latitude, 37.5595);
   assert.equal(calls, 1);
   assert.equal(firstBudget.used, 1);
@@ -317,39 +211,24 @@ test('a faster second pedestrian alternative reaches journey comparison and surv
 
 test('a malformed or disconnected pedestrian alternative cannot poison its valid sibling or be repaired into a fabricated route', async () => {
   let validId: string | undefined;
-
   for (const corruption of ['unsupported-mode', 'step-gap', 'endpoint-drift'] as const) {
     for (const invalidFirst of [true, false]) {
       const payload = alternativesFixture(),
         broken = payload.routes[0],
         valid = payload.routes[1];
-
-      if (corruption === 'unsupported-mode') {
-        broken.legs[0].steps[0].mode = 'driving';
-      }
-
-      if (corruption === 'step-gap') {
-        broken.legs[0].steps[1].geometry.coordinates[0][1] += 0.000004;
-      }
-
-      if (corruption === 'endpoint-drift') {
-        broken.geometry.coordinates[0][1] += 0.00001;
-      }
-
+      if (corruption === 'unsupported-mode') broken.legs[0].steps[0].mode = 'driving';
+      if (corruption === 'step-gap') broken.legs[0].steps[1].geometry.coordinates[0][1] += 0.000004;
+      if (corruption === 'endpoint-drift') broken.geometry.coordinates[0][1] += 0.00001;
       payload.routes = invalidFirst
         ? [broken, valid, structuredClone(valid)]
         : [valid, broken, structuredClone(valid)];
-
       const router = new PedestrianRouter({
         endpoint: ownEndpoint,
         now: () => NOW,
         fetcher: async () => reply(payload),
       });
-
       const routes = await router.walking(request, new CallBudget(1));
-
       validId ??= routes[0].id;
-
       assert.equal(
         routes[0].id,
         validId,
@@ -357,24 +236,14 @@ test('a malformed or disconnected pedestrian alternative cannot poison its valid
       );
       assert.deepEqual(
         routes.map((route) => route.durationSeconds),
-        [
-          {
-            min: 1000,
-            max: 1023,
-          },
-        ],
+        [{ min: 1000, max: 1023 }],
         `${corruption}, invalid first: ${invalidFirst}; duplicates cannot occupy additional candidate slots`,
       );
       assert.deepEqual(
         routes[0].segments[0].polyline,
-        valid.geometry.coordinates.map(([longitude, latitude]) => ({
-          longitude,
-          latitude,
-        })),
+        valid.geometry.coordinates.map(([longitude, latitude]) => ({ longitude, latitude })),
       );
-
       payload.routes = [broken];
-
       await assert.rejects(
         new PedestrianRouter({
           endpoint: ownEndpoint,
@@ -413,13 +282,11 @@ test('the captured Seoul response preserves all 39 source path points despite it
     },
   };
   const budget = new CallBudget(1);
-
   const [route] = await new PedestrianRouter({
     endpoint: ownEndpoint,
     now: () => NOW,
     fetcher: async () => reply(payload),
   }).walking(endpoints, budget);
-
   assert.deepEqual(
     route.segments[0].polyline,
     payload.routes[0].geometry.coordinates.map(([longitude, latitude]: number[]) => ({
@@ -430,10 +297,7 @@ test('the captured Seoul response preserves all 39 source path points despite it
   );
   assert.deepEqual(
     route.durationSeconds,
-    {
-      min: 1660,
-      max: 1672,
-    },
+    { min: 1660, max: 1672 },
     '1659.7 s source duration plus the independently measured 12 s snap allowance',
   );
   assert.equal(route.distanceMeters, 2075);
@@ -454,31 +318,18 @@ test('source-position tolerance cannot admit a disconnected step, over-one-meter
   for (const kind of ['waypoint', 'maneuver', 'step-join', 'actual-snap'] as const) {
     const payload = fixture();
     let endpoints = request;
-
-    if (kind === 'waypoint') {
-      payload.waypoints[0].location[1] += 0.00001;
-    } // 1.11 m
-
-    if (kind === 'maneuver') {
-      payload.routes[0].legs[0].steps[0].maneuver.location[1] += 0.00001;
-    }
-
-    if (kind === 'step-join') {
-      payload.routes[0].legs[0].steps[1].geometry.coordinates[0][1] += 0.000004;
-    } // Even 0.44 m cannot join disconnected paths.
-
+    if (kind === 'waypoint') payload.waypoints[0].location[1] += 0.00001; // 1.11 m
+    if (kind === 'maneuver') payload.routes[0].legs[0].steps[0].maneuver.location[1] += 0.00001;
+    if (kind === 'step-join')
+      payload.routes[0].legs[0].steps[1].geometry.coordinates[0][1] += 0.000004; // Even 0.44 m cannot join disconnected paths.
     if (kind === 'actual-snap') {
       payload.waypoints[0].location[1] -= 0.000008;
       payload.waypoints[0].distance = 0;
       endpoints = {
         ...request,
-        origin: {
-          ...request.origin,
-          latitude: START[1] - ((75.1 / 6_371_000) * 180) / Math.PI,
-        },
+        origin: { ...request.origin, latitude: START[1] - ((150.1 / 6_371_000) * 180) / Math.PI },
       };
     }
-
     await assert.rejects(
       new PedestrianRouter({
         endpoint: ownEndpoint,
@@ -498,14 +349,11 @@ test('dedicated foot routing preserves actual geometry and exposes included snap
     fetcher: async (url, init) => {
       sentUrl = new URL(String(url));
       sentInit = init;
-
       return reply(fixture());
     },
   });
   const budget = new CallBudget();
-
   const [route] = await router.walking(request, budget);
-
   assert.equal(router.configured, true);
   assert.equal(sentUrl?.origin, 'https://routing.openstreetmap.de');
   assert.match(sentUrl!.pathname, /^\/routed-foot\/route\/v1\/foot\//);
@@ -524,42 +372,36 @@ test('dedicated foot routing preserves actual geometry and exposes included snap
   assert.equal(sentUrl?.searchParams.get('geometries'), 'geojson');
   assert.equal(sentUrl?.searchParams.get('overview'), 'full');
   assert.equal(sentUrl?.searchParams.get('steps'), 'true');
-  assert.equal(sentUrl?.searchParams.get('radiuses'), '75;75');
+  assert.equal(
+    sentUrl?.searchParams.get('radiuses'),
+    '150;150',
+    'a map point inside a station or mall may sit ~100 m from a foot path',
+  );
   assert.equal(sentInit?.redirect, 'error');
   assert.match(new Headers(sentInit?.headers).get('User-Agent')!, /Jigakjido/);
   assert.equal(new Headers(sentInit?.headers).has('Authorization'), false);
   assert.equal(budget.used, 1);
   assert.deepEqual(
     route.durationSeconds,
-    {
-      min: 1235,
-      max: 1258,
-    },
+    { min: 1235, max: 1258 },
     'the two ≈11.12 m network snaps add one 23-second planning allowance only to the slow bound',
   );
   assert.equal(route.distanceMeters, 1501);
   assert.deepEqual(route.segments[0].polyline, [
-    {
-      longitude: START[0],
-      latitude: START[1],
-    },
-    {
-      longitude: MIDDLE[0],
-      latitude: MIDDLE[1],
-    },
-    {
-      longitude: END[0],
-      latitude: END[1],
-    },
+    { longitude: START[0], latitude: START[1] },
+    { longitude: MIDDLE[0], latitude: MIDDLE[1] },
+    { longitude: END[0], latitude: END[1] },
   ]);
   assert.equal(route.segments[0].start.latitude, START[1]);
   assert.equal(route.segments[0].end.latitude, END[1]);
-  assert.equal(route.segments[0].runAllowed, false);
+  assert.equal(
+    route.segments[0].runAllowed,
+    true,
+    'an outdoor network walk may be run when the rider allows it',
+  );
   assert.equal(route.segments[0].networkSnap?.allowanceSeconds, 23);
   assert.match(route.segments[0].routingSource!.label, /FOSSGIS/);
-
   const { label: _label, ...source } = route.segments[0].routingSource!;
-
   assert.deepEqual(source, {
     mode: 'live',
     provider: 'osrm-foot',
@@ -613,14 +455,10 @@ test('unsupported modes, malformed WGS84 and disconnected or invented geometry c
       body.routes[0].distance = 1;
     },
   ];
-
   for (const mutation of mutate) {
     const payload = fixture();
-
     mutation(payload);
-
     const budget = new CallBudget();
-
     await assert.rejects(
       new PedestrianRouter({
         endpoint: ownEndpoint,
@@ -633,22 +471,18 @@ test('unsupported modes, malformed WGS84 and disconnected or invented geometry c
   }
 });
 
-test('both reported and independently measured endpoint gaps enforce the existing 75-meter limit', async () => {
+test('both reported and independently measured endpoint gaps enforce the 150-meter limit', async () => {
   for (const kind of ['reported', 'measured'] as const) {
     const payload = fixture();
-
-    if (kind === 'reported') {
-      payload.waypoints[0].distance = 76;
-    } else {
-      const moved = [START[0], 37.5555];
-
+    if (kind === 'reported') payload.waypoints[0].distance = 151;
+    else {
+      const moved = [START[0], 37.5562];
       payload.waypoints[0].distance = 0;
       payload.waypoints[0].location = moved;
       payload.routes[0].geometry.coordinates[0] = moved;
       payload.routes[0].legs[0].steps[0].geometry.coordinates[0] = moved;
       payload.routes[0].legs[0].steps[0].maneuver.location = moved;
     }
-
     await assert.rejects(
       new PedestrianRouter({
         endpoint: ownEndpoint,
@@ -662,22 +496,17 @@ test('both reported and independently measured endpoint gaps enforce the existin
 
 test('consistent provider totals cannot erase the physical distance of their complete walking geometry', async () => {
   const payload = fixture();
-
   payload.routes[0].distance = 0.1;
   payload.routes[0].duration = 0.1;
   payload.routes[0].legs[0].distance = 0.1;
   payload.routes[0].legs[0].duration = 0.1;
-
   for (const step of payload.routes[0].legs[0].steps) {
     step.distance = 0;
     step.duration = 0;
   }
-
   payload.routes[0].legs[0].steps[0].distance = 0.1;
   payload.routes[0].legs[0].steps[0].duration = 0.1;
-
   const budget = new CallBudget();
-
   await assert.rejects(
     new PedestrianRouter({
       endpoint: ownEndpoint,
@@ -691,43 +520,31 @@ test('consistent provider totals cannot erase the physical distance of their com
 
 test('small distance rounding is accepted without inventing additional walking time or geometry', async () => {
   const payload = fixture();
-
   // Independently measured fixture geometry is approximately 1417.623 m.
   payload.routes[0].distance = 1417.6;
   payload.routes[0].legs[0].distance = 1417.6;
   payload.routes[0].legs[0].steps[0].distance = 647.4;
   payload.routes[0].legs[0].steps[1].distance = 770.2;
-
   const [route] = await new PedestrianRouter({
     endpoint: ownEndpoint,
     now: () => NOW,
     fetcher: async () => reply(payload),
   }).walking(request, new CallBudget());
-
   assert.equal(route.distanceMeters, 1418);
-  assert.deepEqual(route.durationSeconds, {
-    min: 1235,
-    max: 1258,
-  });
+  assert.deepEqual(route.durationSeconds, { min: 1235, max: 1258 });
   assert.equal(route.segments[0].polyline!.length, 3);
 });
 
 test('missing invalid or future map-version timestamps remain explicitly unknown', async () => {
   for (const version of [undefined, 'invalid', '2026-02-31T00:00:00Z', '2026-10-16T00:00:00Z']) {
     const payload = fixture();
-
-    if (version === undefined) {
-      delete (payload as Partial<typeof payload>).data_version;
-    } else {
-      payload.data_version = version;
-    }
-
+    if (version === undefined) delete (payload as Partial<typeof payload>).data_version;
+    else payload.data_version = version;
     const [route] = await new PedestrianRouter({
       endpoint: ownEndpoint,
       now: () => NOW,
       fetcher: async () => reply(payload),
     }).walking(request, new CallBudget());
-
     assert.equal(route.segments[0].routingSource?.sourceTimestamp, null);
     assert.equal(route.segments[0].routingSource?.isRealtime, false);
   }
@@ -741,39 +558,27 @@ test('cache hits preserve observation receipt time and return immutable caller-s
     now: () => now,
     fetcher: async () => {
       calls++;
-
       return reply(fixture());
     },
   });
-
   const firstBudget = new CallBudget(),
     [first] = await router.walking(request, firstBudget);
-
   assert.match(first.segments[0].routingSource!.label, /OSRM/);
   assert.doesNotMatch(
     first.segments[0].routingSource!.label,
     /FOSSGIS/,
     'a separately hosted service must not be credited as a FOSSGIS request',
   );
-
   first.segments[0].polyline![0].latitude = 0;
   now += 120_000;
-
   const secondBudget = new CallBudget(),
     [second] = await router.walking(
       {
-        origin: {
-          ...request.origin,
-          name: '현재 위치',
-        },
-        destination: {
-          ...request.destination,
-          name: '약속 장소',
-        },
+        origin: { ...request.origin, name: '현재 위치' },
+        destination: { ...request.destination, name: '약속 장소' },
       },
       secondBudget,
     );
-
   assert.equal(calls, 1);
   assert.equal(firstBudget.used, 1);
   assert.equal(secondBudget.used, 0);
@@ -781,12 +586,9 @@ test('cache hits preserve observation receipt time and return immutable caller-s
   assert.equal(second.segments[0].start.name, '현재 위치');
   assert.equal(second.segments[0].end.name, '약속 장소');
   assert.equal(second.segments[0].routingSource?.receivedAt, NOW);
-
   now = NOW + 300_001;
-
   const thirdBudget = new CallBudget(),
     [third] = await router.walking(request, thirdBudget);
-
   assert.equal(calls, 2);
   assert.equal(thirdBudget.used, 1);
   assert.equal(third.segments[0].routingSource?.receivedAt, now);
@@ -800,7 +602,6 @@ test('in-flight identical coordinate lookups share the actual HTTP attempt and i
     now: () => NOW,
     fetcher: async () => {
       calls++;
-
       return response.promise;
     },
   });
@@ -808,11 +609,8 @@ test('in-flight identical coordinate lookups share the actual HTTP attempt and i
     secondBudget = new CallBudget();
   const first = router.walking(request, firstBudget),
     second = router.walking(request, secondBudget);
-
   response.resolve(reply(fixture()));
-
   const [a, b] = await Promise.all([first, second]);
-
   assert.equal(calls, 1);
   assert.equal(firstBudget.used, 1);
   assert.equal(secondBudget.used, 0);
@@ -829,13 +627,10 @@ test('a fresh pedestrian source cache completes transit access in a new profiled
     now: () => now,
     fetcher: async () => {
       calls++;
-
       return reply(fixture());
     },
   });
-
   await foot.walking(request, new CallBudget());
-
   const destination = {
     ...request.destination,
     id: 'last-stop',
@@ -847,10 +642,7 @@ test('a fresh pedestrian source cache completes transit access in a new profiled
     title: '2호선',
     transfers: 0,
     distanceMeters: 1200,
-    durationSeconds: {
-      min: 300,
-      max: 300,
-    },
+    durationSeconds: { min: 300, max: 300 },
     segments: [
       {
         id: 'ride',
@@ -860,16 +652,10 @@ test('a fresh pedestrian source cache completes transit access in a new profiled
         start: request.destination,
         end: destination,
         distanceMeters: 1200,
-        durationSeconds: {
-          min: 300,
-          max: 300,
-        },
+        durationSeconds: { min: 300, max: 300 },
         runAllowed: false,
         polyline: [request.destination, destination],
-        transit: {
-          lines: ['2호선'],
-          stops: [request.destination.name, destination.name],
-        },
+        transit: { lines: ['2호선'], stops: [request.destination.name, destination.name] },
       },
     ],
   };
@@ -885,42 +671,19 @@ test('a fresh pedestrian source cache completes transit access in a new profiled
     foot,
   );
   const budget = new CallBudget(1);
-
   await budget.run(() => null);
-
   const freshSearch = () => withRouteQueryReuse(profileRouteProvider(source, new SearchProfiler()));
-
-  const renamedOrigin = {
-    ...request.origin,
-    name: '현재 위치',
-  };
-
+  const renamedOrigin = { ...request.origin, name: '현재 위치' };
   const [result] = await enrichTransitRoutes(
     [train],
-    {
-      origin: renamedOrigin,
-      destination,
-    },
-    {
-      provider: freshSearch(),
-      budget,
-      maxAccessCalls: 0,
-      now,
-    },
+    { origin: renamedOrigin, destination },
+    { provider: freshSearch(), budget, maxAccessCalls: 0, now },
   );
-
   const access = result.segments[0];
-
-  assert.deepEqual(access.durationSeconds, {
-    min: 1235,
-    max: 1258,
-  });
+  assert.deepEqual(access.durationSeconds, { min: 1235, max: 1258 });
   assert.deepEqual(
     access.polyline,
-    [START, MIDDLE, END].map(([longitude, latitude]) => ({
-      longitude,
-      latitude,
-    })),
+    [START, MIDDLE, END].map(([longitude, latitude]) => ({ longitude, latitude })),
   );
   assert.equal(access.start.name, '현재 위치');
   assert.equal(
@@ -934,23 +697,12 @@ test('a fresh pedestrian source cache completes transit access in a new profiled
     1,
     'the new search retains its exhausted budget and spends no hidden request',
   );
-
   now += 300_001;
-
   const [expired] = await enrichTransitRoutes(
     [train],
-    {
-      origin: renamedOrigin,
-      destination,
-    },
-    {
-      provider: freshSearch(),
-      budget,
-      maxAccessCalls: 0,
-      now,
-    },
+    { origin: renamedOrigin, destination },
+    { provider: freshSearch(), budget, maxAccessCalls: 0, now },
   );
-
   assert.equal(expired.segments[0].routingSource, undefined);
   assert.equal(
     expired.segments[0].polyline,
@@ -976,7 +728,6 @@ test('another search cannot budget an unfinished pedestrian lookup as free when 
       walking: (_request, budget) =>
         budget.run(() => {
           calls++;
-
           return [];
         }),
     },
@@ -986,15 +737,8 @@ test('another search cannot budget an unfinished pedestrian lookup as free when 
     owner = provider.walking(request, ownerBudget);
   const other = withRouteQueryReuse(provider),
     otherBudget = new CallBudget(1);
-
   assert.equal(routeQueryIsReusable(other, 'walking', request, otherBudget), false);
-
-  pendingResponse.resolve(
-    reply({
-      code: 'NoRoute',
-    }),
-  );
-
+  pendingResponse.resolve(reply({ code: 'NoRoute' }));
   assert.deepEqual(await owner, []);
   assert.equal(ownerBudget.used, 2);
   assert.equal(calls, 1);
@@ -1012,26 +756,18 @@ test('the bounded cache evicts old coordinate entries instead of retaining an un
     now: () => NOW,
     fetcher: async () => {
       calls++;
-
       return reply(fixture());
     },
   });
-
-  for (let index = 0; index < 65; index++) {
+  for (let index = 0; index < 65; index++)
     await router.walking(
       {
         ...request,
-        origin: {
-          ...request.origin,
-          latitude: request.origin.latitude + index * 0.0000001,
-        },
+        origin: { ...request.origin, latitude: request.origin.latitude + index * 0.0000001 },
       },
       new CallBudget(),
     );
-  }
-
   await router.walking(request, new CallBudget());
-
   assert.equal(calls, 66, 'the first of 65 unique entries has left the 64-entry cache');
 });
 
@@ -1042,13 +778,9 @@ test('every failed actual attempt spends its shared budget and never retries bey
     endpoint: ownEndpoint,
     fetcher: async () => {
       calls++;
-
-      return reply({
-        code: 'NoRoute',
-      });
+      return reply({ code: 'NoRoute' });
     },
   });
-
   await assert.rejects(router.walking(request, budget), code('NO_ROUTES'));
   await assert.rejects(router.walking(request, budget), code('CALL_BUDGET_EXCEEDED'));
   assert.equal(calls, 1);
@@ -1058,26 +790,17 @@ test('every failed actual attempt spends its shared budget and never retries bey
 test('network and response-body waits time out even when an injected transport ignores cancellation', async () => {
   for (const stage of ['headers', 'body'] as const) {
     const late = deferred<Response>();
-    const hangingBody = new Response(
-      new ReadableStream<Uint8Array>({
-        start() {},
-      }),
-      {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-    );
+    const hangingBody = new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
     const budget = new CallBudget();
     const router = new PedestrianRouter({
       endpoint: ownEndpoint,
       timeoutMs: 10,
       fetcher: async () => (stage === 'headers' ? late.promise : hangingBody),
     });
-
     await assert.rejects(router.walking(request, budget), code('PROVIDER_TIMEOUT'));
     assert.equal(budget.used, 1);
-
     late.resolve(reply(fixture()));
   }
 });
@@ -1090,26 +813,17 @@ test('a response arriving after an ignored transport abort still releases its un
     timeoutMs: 10,
     fetcher: async () => late.promise,
   });
-
   await assert.rejects(router.walking(request, new CallBudget()), code('PROVIDER_TIMEOUT'));
-
   const response = new Response(
     new ReadableStream<Uint8Array>({
       cancel() {
         cancellations++;
       },
     }),
-    {
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    },
+    { headers: { 'Content-Type': 'application/json' } },
   );
-
   late.resolve(response);
-
   await new Promise<void>((resolve) => setImmediate(resolve));
-
   assert.equal(cancellations, 1);
 });
 
@@ -1117,32 +831,15 @@ test('redirects, non-JSON responses and oversized streams never become routing d
   for (const response of [
     new Response('private-provider-text', {
       status: 302,
-      headers: {
-        Location: 'https://other.example/',
-      },
+      headers: { Location: 'https://other.example/' },
     }),
-    new Response('private-provider-text', {
-      headers: {
-        'Content-Type': 'text/html',
-      },
-    }),
-    new Response('x'.repeat(2_000_001), {
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    }),
+    new Response('private-provider-text', { headers: { 'Content-Type': 'text/html' } }),
+    new Response('x'.repeat(2_000_001), { headers: { 'Content-Type': 'application/json' } }),
     new Response('{}', {
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': '2000001',
-      },
+      headers: { 'Content-Type': 'application/json', 'Content-Length': '2000001' },
     }),
   ]) {
-    const router = new PedestrianRouter({
-      endpoint: ownEndpoint,
-      fetcher: async () => response,
-    });
-
+    const router = new PedestrianRouter({ endpoint: ownEndpoint, fetcher: async () => response });
     await assert.rejects(
       router.walking(request, new CallBudget()),
       (error) => error instanceof ApiError && !error.message.includes('private-provider-text'),
@@ -1169,25 +866,11 @@ test('unconsumed redirect, throttling, failure and invalid-content responses can
       status: kind === 'redirect' ? 302 : kind === 'limit' ? 429 : kind === 'failure' ? 503 : 200,
       headers: {
         'Content-Type': kind === 'content-type' ? 'text/html' : 'application/json',
-        ...(kind === 'content-length'
-          ? {
-              'Content-Length': '2000001',
-            }
-          : {}),
+        ...(kind === 'content-length' ? { 'Content-Length': '2000001' } : {}),
       },
     });
-
-    if (kind === 'redirected') {
-      Object.defineProperty(response, 'redirected', {
-        value: true,
-      });
-    }
-
-    const router = new PedestrianRouter({
-      endpoint: ownEndpoint,
-      fetcher: async () => response,
-    });
-
+    if (kind === 'redirected') Object.defineProperty(response, 'redirected', { value: true });
+    const router = new PedestrianRouter({ endpoint: ownEndpoint, fetcher: async () => response });
     await assert.rejects(
       router.walking(request, new CallBudget()),
       code(
@@ -1205,24 +888,13 @@ test('unconsumed redirect, throttling, failure and invalid-content responses can
 
 test('public FOSSGIS HTTP starts are globally limited across separate router instances', async () => {
   const starts: number[] = [];
-
   const fetcher: typeof fetch = async () => {
     starts.push(Date.now());
-
     return reply(fixture());
   };
-
-  const a = new PedestrianRouter({
-      fetcher,
-      timeoutMs: 4_000,
-    }),
-    b = new PedestrianRouter({
-      fetcher,
-      timeoutMs: 4_000,
-    });
-
+  const a = new PedestrianRouter({ fetcher, timeoutMs: 4_000 }),
+    b = new PedestrianRouter({ fetcher, timeoutMs: 4_000 });
   await Promise.all([a.walking(request, new CallBudget()), b.walking(request, new CallBudget())]);
-
   assert.equal(starts.length, 2);
   assert.ok(
     starts[1] - starts[0] >= 990,
@@ -1237,84 +909,50 @@ test('a slow public response permits one rate-spaced overlap but never a third a
   const starts: number[] = [];
   let active = 0,
     peak = 0;
-
   const fetcher: typeof fetch = async () => {
     starts.push(performance.now());
-
     active++;
     peak = Math.max(peak, active);
-
     const index = starts.length;
-
     try {
-      if (index === 1) {
-        return await first.promise;
-      }
-
+      if (index === 1) return await first.promise;
       if (index === 2) {
         secondStarted.resolve();
-
         return await second.promise;
       }
-
       return reply(fixture());
     } finally {
       active--;
     }
   };
-
   const routers = Array.from(
-    {
-      length: 3,
-    },
-    () =>
-      new PedestrianRouter({
-        fetcher,
-        now: () => NOW,
-        timeoutMs: 7_000,
-      }),
+    { length: 3 },
+    () => new PedestrianRouter({ fetcher, now: () => NOW, timeoutMs: 7_000 }),
   );
   const budgets = routers.map(() => new CallBudget(1));
   const pending = routers.map((router, index) => router.walking(request, budgets[index]));
   const result = Promise.allSettled(pending);
   const watchdog = setTimeout(() => {
-    first.resolve(
-      reply({
-        code: 'NoRoute',
-      }),
-    );
-
+    first.resolve(reply({ code: 'NoRoute' }));
     second.resolve(reply(fixture()));
   }, 5_000);
-
   try {
     await secondStarted.promise;
-
     assert.equal(
       active,
       2,
       'the next permitted request starts before the first slow response completes',
     );
     assert.equal(starts.length, 2);
-
     await new Promise<void>((resolve) => setTimeout(resolve, 1_050));
-
     assert.equal(
       starts.length,
       2,
       'the global two-request cap still holds after another start interval passes',
     );
-
-    first.resolve(
-      reply({
-        code: 'NoRoute',
-      }),
-    );
-
+    first.resolve(reply({ code: 'NoRoute' }));
     second.resolve(reply(fixture()));
-
     const outcomes = await result;
-
     assert.deepEqual(
       outcomes.map((outcome) => outcome.status),
       ['rejected', 'fulfilled', 'fulfilled'],
@@ -1327,15 +965,8 @@ test('a slow public response permits one rate-spaced overlap but never a third a
     assert.ok(budgets.every((budget) => budget.used === 1));
   } finally {
     clearTimeout(watchdog);
-
-    first.resolve(
-      reply({
-        code: 'NoRoute',
-      }),
-    );
-
+    first.resolve(reply({ code: 'NoRoute' }));
     second.resolve(reply(fixture()));
-
     await result;
   }
 });
@@ -1343,15 +974,11 @@ test('a slow public response permits one rate-spaced overlap but never a third a
 test('a trailing-dot public FQDN keeps the same canonical endpoint, source and shared rate limit', async () => {
   const starts: number[] = [],
     urls: URL[] = [];
-
   const fetcher: typeof fetch = async (input) => {
     starts.push(Date.now());
-
     urls.push(new URL(String(input)));
-
     return reply(fixture());
   };
-
   const options = {
     endpoint: 'https://routing.openstreetmap.de./routed-foot/route/v1/foot',
     fetcher,
@@ -1359,31 +986,21 @@ test('a trailing-dot public FQDN keeps the same canonical endpoint, source and s
   };
   const a = new PedestrianRouter(options),
     b = new PedestrianRouter(options);
-
   const routes = await Promise.all([
     a.walking(request, new CallBudget()),
     b.walking(request, new CallBudget()),
   ]);
-
   assert.ok(
     starts[1] - starts[0] >= 990,
     'an equivalent public FQDN cannot bypass the module-wide request interval',
   );
   assert.ok(urls.every((url) => url.hostname === 'routing.openstreetmap.de'));
   assert.ok(routes.every(([route]) => /FOSSGIS/.test(route.segments[0].routingSource!.label)));
-
   for (const endpoint of [
     'http://routing.openstreetmap.de./routed-foot/route/v1/foot',
     'https://routing.openstreetmap.de./different-profile/route/v1/foot',
-  ]) {
-    assert.throws(
-      () =>
-        new PedestrianRouter({
-          endpoint,
-        }),
-      code('INVALID_INPUT'),
-    );
-  }
+  ])
+    assert.throws(() => new PedestrianRouter({ endpoint }), code('INVALID_INPUT'));
 });
 
 test('queued public work respects its own timeout and spends nothing until its HTTP actually starts', async () => {
@@ -1395,30 +1012,23 @@ test('queued public work respects its own timeout and spends nothing until its H
     timeoutMs: 500,
     fetcher: async () => {
       entered.resolve();
-
       return held.promise;
     },
   });
   const inProgress = first.walking(request, new CallBudget());
-
   await entered.promise;
-
   const secondBudget = new CallBudget();
   const second = new PedestrianRouter({
     timeoutMs: 10,
     fetcher: async () => {
       secondCalls++;
-
       return reply(fixture());
     },
   });
-
   await assert.rejects(second.walking(request, secondBudget), code('PROVIDER_TIMEOUT'));
   assert.equal(secondCalls, 0);
   assert.equal(secondBudget.used, 0);
-
   held.resolve(reply(fixture()));
-
   await inProgress;
 });
 
@@ -1435,7 +1045,6 @@ test('consumer timeouts do not release physical public slots until ignored-abort
         fetcher: async () => {
           physicalActive++;
           peak = Math.max(peak, physicalActive);
-
           try {
             return await response.promise;
           } finally {
@@ -1448,29 +1057,22 @@ test('consumer timeouts do not release physical public slots until ignored-abort
   const settled = Promise.allSettled(failures);
   const canceledBody = deferred<void>(),
     bodyCancelStarted = deferred<void>();
-
   const fetcher: typeof fetch = async () => {
     recoveredCalls++;
     physicalActive++;
     peak = Math.max(peak, physicalActive);
     physicalActive--;
-
     return reply(fixture());
   };
-
   try {
-    for (const result of await settled) {
+    for (const result of await settled)
       assert.ok(result.status === 'rejected' && code('PROVIDER_TIMEOUT')(result.reason));
-    }
-
     const refusedBudget = new CallBudget(1);
-
     await assert.rejects(
-      new PedestrianRouter({
-        throttle: noDelay,
-        timeoutMs: 20,
-        fetcher,
-      }).walking(request, refusedBudget),
+      new PedestrianRouter({ throttle: noDelay, timeoutMs: 20, fetcher }).walking(
+        request,
+        refusedBudget,
+      ),
       code('PROVIDER_TIMEOUT'),
     );
     assert.equal(recoveredCalls, 0);
@@ -1479,26 +1081,18 @@ test('consumer timeouts do not release physical public slots until ignored-abort
       0,
       'two still-pending real fetches block a third HTTP attempt after caller deadlines',
     );
-
     late[0].resolve(
       new Response(
         new ReadableStream<Uint8Array>({
           cancel() {
             bodyCancelStarted.resolve();
-
             return canceledBody.promise;
           },
         }),
-        {
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
+        { headers: { 'Content-Type': 'application/json' } },
       ),
     );
-
     await bodyCancelStarted.promise;
-
     const recovery = new PedestrianRouter({
       throttle: noDelay,
       timeoutMs: 1_000,
@@ -1506,27 +1100,20 @@ test('consumer timeouts do not release physical public slots until ignored-abort
       fetcher,
     });
     const recovered = recovery.walking(request, new CallBudget(1));
-
     await new Promise<void>((resolve) => setImmediate(resolve));
-
     assert.equal(
       recoveredCalls,
       0,
       'a late response body must finish cancellation before the slot is freed',
     );
-
     canceledBody.resolve();
-
     assert.equal((await recovered)[0].durationSeconds.min, 1235);
     assert.equal(recoveredCalls, 1);
     assert.equal(peak, 2);
   } finally {
     canceledBody.resolve();
-
     late[0].resolve(reply(fixture()));
-
     late[1].resolve(reply(fixture()));
-
     await settled;
   }
 });
@@ -1538,54 +1125,218 @@ test('disabled adapters and invalid coordinates cannot call the service; custom 
     enabled: false,
     fetcher: async () => {
       calls++;
-
       return reply(fixture());
     },
   });
-
   assert.equal(disabled.configured, false);
   await assert.rejects(disabled.walking(request, budget), code('LIVE_NOT_CONFIGURED'));
-
   const router = new PedestrianRouter({
     endpoint: ownEndpoint,
     fetcher: async () => {
       calls++;
-
       return reply(fixture());
     },
   });
-
   await assert.rejects(
-    router.walking(
-      {
-        ...request,
-        origin: {
-          ...request.origin,
-          latitude: NaN,
-        },
-      },
-      budget,
-    ),
+    router.walking({ ...request, origin: { ...request.origin, latitude: NaN } }, budget),
     code('INVALID_INPUT'),
   );
-
   for (const endpoint of [
     'https://routing.openstreetmap.de/routed-car/route/v1/driving',
     'https://user:password@foot.example/route/v1/foot',
     'https://foot.example/route/v1/foot?secret=private',
-  ]) {
+  ])
     assert.throws(
-      () =>
-        new PedestrianRouter({
-          endpoint,
-        }),
+      () => new PedestrianRouter({ endpoint }),
       (error) =>
         error instanceof Error &&
         !error.message.includes('password') &&
         !error.message.includes('private'),
     );
-  }
-
   assert.equal(calls, 0);
   assert.equal(budget.used, 0);
+});
+
+test('walks requested together travel in one multi-stop request and each keeps its own validated leg', async () => {
+  const START2 = [126.972, 37.556];
+  const second: RouteEndpoints = {
+    origin: {
+      id: 'second-stop',
+      name: '숭례문',
+      address: '',
+      latitude: 37.5561,
+      longitude: 126.972,
+    },
+    destination: request.destination,
+  };
+  const step = (from: number[], to: number[], distance: number, duration: number) => [
+    {
+      mode: 'walking',
+      name: '세종대로',
+      distance,
+      duration,
+      geometry: { type: 'LineString', coordinates: [[...from], [...to]] },
+      maneuver: { type: 'depart', location: [...from] },
+    },
+    {
+      mode: 'walking',
+      name: '',
+      distance: 0,
+      duration: 0,
+      geometry: { type: 'LineString', coordinates: [[...to], [...to]] },
+      maneuver: { type: 'arrive', location: [...to] },
+    },
+  ];
+  const first = fixture().routes[0].legs[0];
+  const chain = {
+    code: 'Ok',
+    data_version: '2026-10-14T00:00:00Z',
+    waypoints: [START, END, START2, END].map((location) => ({
+      distance: 10,
+      location: [...location],
+      name: '',
+    })),
+    routes: [
+      {
+        distance: 4100.2,
+        duration: 3234.4,
+        legs: [
+          first,
+          { distance: 1300, duration: 1000, steps: step(END, START2, 1300, 1000) },
+          { distance: 1300, duration: 1000, steps: step(START2, END, 1300, 1000) },
+        ],
+      },
+    ],
+  };
+  const urls: URL[] = [];
+  const router = new PedestrianRouter({
+    endpoint: ownEndpoint,
+    now: () => NOW,
+    batchWindowMs: 20,
+    fetcher: async (input) => {
+      urls.push(new URL(String(input)));
+      return reply(chain);
+    },
+  });
+  const budget = new CallBudget(2);
+  const [a, b] = await Promise.all([
+    router.walking(request, budget),
+    router.walking(second, budget),
+  ]);
+  assert.equal(urls.length, 1, 'one HTTP request answers both walks');
+  assert.equal(urls[0].pathname.split('/').at(-1)!.split(';').length, 4);
+  assert.equal(urls[0].searchParams.get('alternatives'), 'false');
+  assert.equal(budget.used, 1);
+  assert.deepEqual(a[0].durationSeconds, { min: 1235, max: 1258 });
+  assert.equal(a[0].distanceMeters, 1501);
+  assert.equal(b[0].segments[0].start.name, '숭례문');
+  assert.deepEqual(
+    b[0].segments[0].polyline,
+    [START2, END].map(([longitude, latitude]) => ({ longitude, latitude })),
+  );
+  assert.equal(b[0].durationSeconds.min, 1000);
+  await router.walking(second, new CallBudget(1));
+  assert.equal(urls.length, 1, 'each leg is cached under its own endpoints');
+});
+
+test('a chain the server cannot snap falls back to one request per walk', async () => {
+  const second: RouteEndpoints = {
+    origin: { ...request.origin, id: 'other', latitude: request.origin.latitude + 0.00001 },
+    destination: request.destination,
+  };
+  const sizes: number[] = [];
+  const router = new PedestrianRouter({
+    endpoint: ownEndpoint,
+    now: () => NOW,
+    batchWindowMs: 20,
+    fetcher: async (input) => {
+      const points = new URL(String(input)).pathname.split('/').at(-1)!.split(';').length;
+      sizes.push(points);
+      return reply(points > 2 ? { code: 'NoSegment' } : fixture());
+    },
+  });
+  const budget = new CallBudget(3);
+  const results = await Promise.all([
+    router.walking(request, budget),
+    router.walking(second, budget),
+  ]);
+  assert.deepEqual(sizes, [4, 2, 2]);
+  assert.equal(budget.used, 3);
+  assert.ok(results.every((routes) => routes[0].durationSeconds.min === 1235));
+});
+
+test('a self-hosted server with no quota answers without spending, or waiting on, the search call budget', async () => {
+  let calls = 0;
+  const own = new PedestrianRouter({
+    endpoint: ownEndpoint,
+    now: () => NOW,
+    metered: false,
+    fetcher: async (input) => {
+      calls++;
+      return new URL(String(input)).pathname.startsWith('/table/')
+        ? reply({
+            code: 'Ok',
+            durations: [[300]],
+            sources: [{ distance: 0 }],
+            destinations: [{ distance: 0 }],
+          })
+        : reply(fixture());
+    },
+  });
+  const spent = new CallBudget(1);
+  await spent.run(() => undefined);
+  assert.equal(spent.remaining, 0);
+  assert.equal((await own.walking(request, spent))[0].durationSeconds.min, 1235);
+  assert.deepEqual(
+    (await own.walkingTable([request.origin], [request.destination], spent)).seconds,
+    [[300]],
+  );
+  assert.equal(calls, 2);
+  assert.equal(spent.used, 1, 'only the earlier metered call counts');
+  const publicServer = new PedestrianRouter({
+    metered: false,
+    now: () => NOW,
+    throttle: async () => {},
+    fetcher: async () => reply(fixture()),
+  });
+  await assert.rejects(
+    publicServer.walking(request, spent),
+    code('CALL_BUDGET_EXCEEDED'),
+    'the shared public server always stays metered',
+  );
+});
+
+test('a foot table asks the table service once and charges each end its walk onto the network', async () => {
+  let asked: URL | undefined;
+  const router = new PedestrianRouter({
+    endpoint: ownEndpoint,
+    now: () => NOW,
+    fetcher: async (input) => {
+      asked = new URL(String(input));
+      return reply({
+        code: 'Ok',
+        durations: [[300, null]],
+        sources: [{ distance: 12 }],
+        destinations: [{ distance: 3 }, { distance: 40 }],
+      });
+    },
+  });
+  const budget = new CallBudget(2),
+    places = [
+      request.origin,
+      request.destination,
+      { ...request.destination, id: 'far', latitude: 37.57 },
+    ];
+  const table = await router.walkingTable([places[0]], places.slice(1), budget);
+  assert.ok(asked?.pathname.startsWith('/table/v1/foot/'));
+  assert.equal(asked?.searchParams.get('sources'), '0');
+  assert.equal(asked?.searchParams.get('destinations'), '1;2');
+  assert.deepEqual(table.seconds, [[315, null]]);
+  assert.equal(budget.used, 1);
+  assert.deepEqual(
+    await router.walkingTable([places[0]], places.slice(1), budget),
+    table,
+    'a fresh table is reused without another request',
+  );
+  assert.equal(budget.used, 1);
 });

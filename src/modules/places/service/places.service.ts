@@ -1,21 +1,24 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PlacesRepository } from '../repository/places.repository.js';
-import { placeSearchResult } from '../domain/place-search.js';
+import { PlaceFinder } from '../domain/place-search.js';
 import { placeQuerySchema, pointQuerySchema } from '../dto/places.dto.js';
 import { parseDto } from '../../../common/dto/parse.js';
 
 @Injectable()
 export class PlacesService {
-  constructor(@Inject(PlacesRepository) private readonly places: PlacesRepository) {}
+  private readonly finder: PlaceFinder;
+
+  constructor(@Inject(PlacesRepository) private readonly places: PlacesRepository) {
+    this.finder = new PlaceFinder({ search: (query) => this.places.search(query) });
+  }
 
   async search(query: unknown) {
     const input = parseDto(placeQuerySchema, query);
+    if (this.places.usesLocalCatalogue) {
+      return this.finder.local(input);
+    }
 
-    return placeSearchResult(
-      await this.places.search(input),
-      input.latitude !== undefined,
-      Date.now(),
-    );
+    return this.finder.find(input);
   }
 
   async reverse(query: unknown) {

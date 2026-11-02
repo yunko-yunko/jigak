@@ -346,8 +346,10 @@ test('bus quota and per-second limit codes do not falsely report an invalid cred
         }),
     });
 
-    await assert.rejects(seoul.nearbyStops(point), reason('status'), `Seoul ${code}`);
-    await assert.rejects(tago.nearbyStops(point), reason('status'), `TAGO ${code}`);
+    // 22 is the spent daily quota (until 00:00 KST); 23 the per-second limit, which passes in a moment.
+    const expected = code === '22' ? 'quota' : 'status';
+    await assert.rejects(seoul.nearbyStops(point), reason(expected), `Seoul ${code}`);
+    await assert.rejects(tago.nearbyStops(point), reason(expected), `TAGO ${code}`);
   }
 });
 

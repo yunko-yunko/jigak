@@ -33,7 +33,8 @@ export const etaLearningFeaturesSchema = z
 
 /** No coordinates, place names, account identifiers or raw sensor streams. */
 export interface EtaLearningFeatures {
-  mode: SegmentMode;
+  /** E-bike legs have no learned model: the trained mode enums stay as they were, so no feature exists for them. */
+  mode: Exclude<SegmentMode, 'ebike'>;
   predictedSeconds: number;
   distanceMeters: number;
   startedAt: number;
@@ -58,8 +59,21 @@ export interface EtaLearningObservation {
   evidence: 'user-confirmed' | 'sensor-confirmed' | 'provider-arrival';
 }
 
-/** Whole start-to-arrival timing requires fresh, explicit consent to the expanded scope. */
-export const ETA_LEARNING_CONSENT_VERSION = 'eta-learning-v2' as const;
+/**
+ * Each widening of what is recorded needs fresh, explicit opt-in under its own text: v2 added whole start-to-arrival
+ * timing, v3 stage times the device judged (a tap only where the rider moved on by hand).
+ */
+export const ETA_LEARNING_CONSENT_VERSION = 'eta-learning-v3' as const;
+
+/** Opt-ins given under an older text. A submission under one is refused whole, never relabelled as current. */
+export const OUTDATED_ETA_LEARNING_CONSENT_VERSIONS = ['eta-learning-v1', 'eta-learning-v2'] as const;
+
+export const hasOutdatedEtaLearningConsent = (body: unknown): boolean =>
+  !!body &&
+  typeof body === 'object' &&
+  (OUTDATED_ETA_LEARNING_CONSENT_VERSIONS as readonly unknown[]).includes(
+    (body as { consentVersion?: unknown }).consentVersion,
+  );
 
 export interface EtaCapturedSample {
   segmentIndex: number;

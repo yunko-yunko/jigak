@@ -9,6 +9,9 @@ import { PlacesModule } from './modules/places/places.module.js';
 import { RealtimeModule } from './modules/realtime/realtime.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { ModelsModule } from './modules/models/models.module.js';
+import { TravelTimesModule } from './modules/travel-times/travel-times.module.js';
+import { SimulationModule } from './modules/simulation/simulation.module.js';
+import { MapsModule } from './modules/maps/maps.module.js';
 
 @Module({
   imports: [
@@ -21,6 +24,9 @@ import { ModelsModule } from './modules/models/models.module.js';
     RealtimeModule,
     HealthModule,
     ModelsModule,
+    TravelTimesModule,
+    SimulationModule,
+    MapsModule,
   ],
   providers: [RateLimitService],
 })

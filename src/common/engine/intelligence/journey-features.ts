@@ -12,6 +12,10 @@ export function journeyBaselineProfile(policyState: unknown): string {
   return `journey-baseline-v1:${createHash('sha256').update(JSON.stringify(policyState)).digest('hex')}`;
 }
 
+/** The journey model has no e-bike feature: its seconds count as cycling so no trained feature list changes. */
+const journeyMode = (mode: Route['segments'][number]['mode']) =>
+  mode === 'ebike' ? 'bicycle' : mode;
+
 /** Approximate 500m OD cells and ordered movement types, not surveyed path geometry or jittering GPS points. */
 export function journeyPathIdentity(route: Route): string {
   const cell = (point: Route['origin']) => [
@@ -22,7 +26,7 @@ export function journeyPathIdentity(route: Route): string {
   const movement = route.segments
     .map((segment) => segment.mode)
     .filter((mode) =>
-      ['walk', 'run', 'bus', 'subway', 'bicycle', 'taxi', 'car', 'scooter'].includes(mode),
+      ['walk', 'run', 'bus', 'subway', 'bicycle', 'taxi', 'car', 'scooter', 'ebike'].includes(mode),
     );
 
   return JSON.stringify([
@@ -56,7 +60,7 @@ export function journeyFeaturesForRoute(
       return null;
     }
 
-    modeSeconds[segment.mode] += (end - cursor) / 1000;
+    modeSeconds[journeyMode(segment.mode)] += (end - cursor) / 1000;
     cursor = end;
   }
 
@@ -73,10 +77,10 @@ export function journeyFeaturesForRoute(
     predictedSeconds: (route.durationSeconds.min + route.durationSeconds.max) / 2,
     distanceMeters: route.segments.reduce((n, s) => n + s.distanceMeters, 0),
     modeSeconds,
-    modeSequence: route.segments.map((s) => s.mode),
+    modeSequence: route.segments.map((s) => journeyMode(s.mode)),
     transfers: route.transfers,
     vehicleLegs: route.segments.filter((s) =>
-      ['bus', 'subway', 'taxi', 'car', 'bicycle', 'scooter'].includes(s.mode),
+      ['bus', 'subway', 'taxi', 'car', 'bicycle', 'scooter', 'ebike'].includes(s.mode),
     ).length,
     precipitationMm: local?.precipitationMm ?? null,
     temperatureC: local?.temperatureC ?? null,

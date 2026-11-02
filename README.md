@@ -63,6 +63,7 @@ npm run migration:generate -- src/common/database/migrations/AddNewFeature
 - [배포 환경변수 YAML 예제](deploy/cloud-run.env.example.yaml)
 - [PowerShell 배포 스크립트](deploy/cloud-run.ps1)
 - [Dockerfile](Dockerfile)
+- [모델 자동 갱신 Job](docs/MODEL-REFRESH.md): 코드·이미지는 [`model-refresh/`](model-refresh/Dockerfile)(API 빌드·이미지와 분리, `npm run test:model-refresh`)
 
 기본 배포는 Cloud Run 콘솔의 GitHub 저장소 연결을 사용합니다. 빌드 유형은 Dockerfile로 선택하고 환경변수와 Cloud SQL 연결을 설정합니다. push → Cloud Build 빌드 → Cloud Run 시작 시 마이그레이션 → API 실행으로 진행되므로 직접 이미지 주소를 지정하거나 별도 migration Job을 만들 필요가 없습니다. DB 사용자는 마이그레이션에 필요한 테이블 생성·변경 권한을 가져야 합니다.
 

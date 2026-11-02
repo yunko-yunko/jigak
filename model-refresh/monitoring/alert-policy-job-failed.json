@@ -1,0 +1,32 @@
+{
+  "displayName": "jigak model refresh: job execution failed",
+  "documentation": {
+    "content": "A jigak-model-refresh execution ended in failure (exit 1 = crash, exit 2 = a model is at risk or expired, exit 3 = partial: at least one model failed, was closed or blocked). This fires on the first failed attempt; Cloud Run separately retries once (--max-retries 1), and a failed retry meets the condition again. Read the execution log in Cloud Logging and runs/<runId>/report.json in the models bucket. See jigak-backend/docs/MODEL-REFRESH.md.",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "conditions": [
+    {
+      "displayName": "failed task attempts",
+      "conditionThreshold": {
+        "filter": "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"jigak-model-refresh\" AND metric.type=\"run.googleapis.com/job/completed_task_attempt_count\" AND metric.labels.result=\"failed\"",
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ],
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "0s",
+        "trigger": { "count": 1 }
+      }
+    }
+  ],
+  "alertStrategy": {
+    "notificationRateLimit": { "period": "21600s" },
+    "autoClose": "604800s"
+  },
+  "notificationChannels": ["__CHANNEL__"]
+}

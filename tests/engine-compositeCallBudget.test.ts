@@ -13,25 +13,15 @@ for (const [label, requestedLimit, expectedLimit] of [
     const budget = new budgets.CallBudget(requestedLimit);
     let executed = 0;
     const pending = Promise.allSettled(
-      Array.from(
-        {
-          length: expectedLimit + 3,
-        },
-        (_value, index) =>
-          budget.run(async () => {
-            executed++;
-
-            await Promise.resolve();
-
-            if (index < 4) {
-              throw new ApiError('PROVIDER_TIMEOUT', '통제된 공급원 실패', 504);
-            }
-
-            return index;
-          }),
+      Array.from({ length: expectedLimit + 3 }, (_value, index) =>
+        budget.run(async () => {
+          executed++;
+          await Promise.resolve();
+          if (index < 4) throw new ApiError('PROVIDER_TIMEOUT', '통제된 공급원 실패', 504);
+          return index;
+        }),
       ),
     );
-
     assert.equal(
       executed,
       expectedLimit,
@@ -39,13 +29,10 @@ for (const [label, requestedLimit, expectedLimit] of [
     );
     assert.equal(budget.used, expectedLimit);
     assert.equal(budget.remaining, 0);
-
     const outcomes = await pending;
-
     const failures = outcomes.filter(
       (outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected',
     );
-
     assert.equal(
       failures.filter(
         (outcome) =>
@@ -75,10 +62,8 @@ for (const [label, requestedLimit, expectedLimit] of [
 }
 
 test('routing budgets reject invalid bounds before permitting external requests', () => {
-  for (const invalid of [0, -1, 1.5, 33, NaN, Infinity]) {
+  for (const invalid of [0, -1, 1.5, budgets.MAX_EXPANDED_ROUTE_CALLS + 1, NaN, Infinity])
     assert.throws(() => new budgets.CallBudget(invalid));
-  }
-
   assert.equal(new budgets.CallBudget(1).limit, 1);
   assert.equal(new budgets.CallBudget(16).limit, 16);
 });

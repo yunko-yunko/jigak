@@ -11,7 +11,6 @@ export interface DurationRange {
   min: number;
   max: number;
 }
-
 export interface TimeRange {
   earliest: number;
   latest: number;
@@ -31,6 +30,11 @@ export interface MobilityPreferences {
   allowTaxi?: boolean;
   /** Shared e-scooters for first/last mile; omitted means allowed. */
   allowScooter?: boolean;
+  /** Dockless shared pedal-assist e-bikes (a 자전거, not a PM); omitted means allowed. */
+  allowEbike?: boolean;
+  /** The rider holds a 원동기장치자전거 licence or higher, which kick-scooters need (도로교통법); false
+   * excludes scooter legs, omitted keeps legacy behavior. E-bikes need none. */
+  hasScooterLicense?: boolean;
   /** The rider has their own car: it may start the trip and is left at a public parking lot. */
   hasCar?: boolean;
   /** User-confirmed parking position of their own car; ownership never implies it is at the origin. */
@@ -72,6 +76,10 @@ export interface Provenance {
   sourceTimestamp: number | null;
   receivedAt: number;
   isRealtime: boolean;
+  /** True when the data comes from the server's demo simulator, not a real operator. */
+  simulated?: true;
+  /** The simulator's model version; a permission from another version is refused. */
+  modelVersion?: string;
 }
 
 export type SegmentMode =
@@ -86,8 +94,8 @@ export type SegmentMode =
   | 'return'
   | 'taxi'
   | 'car'
-  | 'scooter';
-
+  | 'scooter'
+  | 'ebike';
 export interface Connection {
   departureAt: number;
   fallbackDepartureAt?: number;
@@ -171,9 +179,36 @@ export interface ScheduleCheck {
     | 'budget';
 }
 
+/** One piece of a boarding's observed or published service: [from, to) epoch ms. Null wait and headway mean no
+ * vehicle of the listed lines departs in it. */
+export interface HeadwayWindow {
+  from: number;
+  to: number;
+  /** Expected wait (whole seconds) of a rider who reaches the stop at a random clock inside the window. */
+  waitSeconds: number | null;
+  /** Mean spacing (whole seconds) between consecutive vehicles of the running lines in the window. */
+  headwaySeconds: number | null;
+}
+
+/** Dated service evidence for a boarding, carried on the bus or subway segment. The shared wait reads it instead of
+ * the time-of-day rule wherever a window covers the clock, so the server and the app compute the same seconds. */
+export interface HeadwayEvidence {
+  version: 1;
+  basis: 'published-timetable' | 'tdata-dispatch' | 'topis-term' | 'operator-headway' | 'rule';
+  derivedAt: number;
+  /** Contiguous and sorted, 1 to 48 windows. */
+  windows: HeadwayWindow[];
+  /** Audit only; never read by the timing code. */
+  lines?: {
+    name: string;
+    routeId?: string;
+    status: 'running' | 'not-running' | 'unknown';
+    reason?: string;
+  }[];
+}
+
 /** Live road congestion over polyline vertices [from, to] of a car or taxi leg. */
 export type TrafficLevel = 'free' | 'slow' | 'delay' | 'jam' | 'blocked' | 'unknown';
-
 export interface TrafficSpan {
   from: number;
   to: number;
@@ -188,7 +223,6 @@ export interface RoadTrafficLink {
   speedKmh: number;
   path: [number, number][];
 }
-
 /** An accident, roadwork, rally or closure reported on the road network. */
 export interface RoadIncident {
   id: string;
@@ -199,16 +233,9 @@ export interface RoadIncident {
   startedAt: number | null;
   clearsAt: number | null;
 }
-
 /** Live congestion laid over the road legs of a route being followed, keyed by segment id. */
 export interface RouteLiveTraffic {
-  legs: Record<
-    string,
-    {
-      spans: TrafficSpan[];
-      delaySeconds: number;
-    }
-  >;
+  legs: Record<string, { spans: TrafficSpan[]; delaySeconds: number }>;
   incidents: RoadIncident[];
   observedAt: number | null;
 }
@@ -235,6 +262,24 @@ export interface ParkingAccess {
   baseMinutes?: number;
 }
 
+/** A subway exit chosen for one station end; passage seconds are 가정값 (no public source times gate to exit). */
+export interface StationExitAccess {
+  /** "2", "6-1"; null = a sidewalk point at a station whose exits carry no number. */
+  ref: string | null;
+  kind: 'exit' | 'entrance';
+  /** The exit itself (map marker). */
+  latitude: number;
+  longitude: number;
+  /** Sidewalk point where the street walk starts (exit) or ends (entrance). */
+  street: { latitude: number; longitude: number };
+  platformSeconds: number;
+  passageSeconds: number;
+  passageMeters: number;
+  platformBasis: 'measured' | 'default';
+  passageBasis: 'assumed';
+  dataset: 'subway-exits-v1';
+}
+
 export interface BaseSegment {
   id: string;
   mode: SegmentMode;
@@ -246,10 +291,9 @@ export interface BaseSegment {
   end: Place;
   /** Set only for a reviewed outdoor path, never for an unknown station interior. */
   runAllowed: boolean;
-  polyline?: {
-    latitude: number;
-    longitude: number;
-  }[];
+  polyline?: { latitude: number; longitude: number }[];
+  /** Entry steps only: the numbered exit (after alighting) or entrance (before boarding) the street walk uses. */
+  stationExit?: StationExitAccess;
   lineName?: string;
   direction?: string;
   walkingDurationSeconds?: DurationRange;
@@ -257,6 +301,8 @@ export interface BaseSegment {
   realtime?: BoardingRealtime;
   timetable?: SubwayTimetable;
   scheduleCheck?: ScheduleCheck;
+  /** Bus and subway only: dated headway windows of this boarding's running lines. */
+  headwayEvidence?: HeadwayEvidence;
   /** A published timetable connection stays distinct from observed vehicle predictions. */
   scheduledConnection?: ScheduledConnection;
   maneuvers?: Maneuver[];
@@ -266,20 +312,14 @@ export interface BaseSegment {
   /** Seconds of `durationSeconds` added for congestion on this leg's roads when the route was planned. */
   roadDelaySeconds?: number;
   /** Explicit uncertainty already included once in durationSeconds.max, before connection selection. */
-  planningBuffer?: {
-    weatherSeconds: number;
-    calibrationSeconds: number;
-  };
+  planningBuffer?: { weatherSeconds: number; calibrationSeconds: number };
   /** Context model replaces weather/legacy timing once; source duration remains auditable. */
   etaPrediction?: {
-    modelVersion: 'eta-context-v2';
+    modelVersion: 'eta-context-v2' | 'eta-hgb-v1';
     evaluatedAt: number;
     sourceDurationSeconds: DurationRange;
     /** Saved source allowances retain their risk-only meaning when prediction is refused. */
-    sourcePlanningBuffer?: {
-      weatherSeconds: number;
-      calibrationSeconds: number;
-    };
+    sourcePlanningBuffer?: { weatherSeconds: number; calibrationSeconds: number };
     features: import('../intelligence/learning.js').EtaLearningFeatures;
     medianSeconds: number;
     lowerSeconds: number;
@@ -287,7 +327,8 @@ export interface BaseSegment {
   };
   /** Separately validated public bus tags; preserves the provider baseline and live-road allowance. */
   publicEtaPrediction?: {
-    modelVersion: 'public-bus-duration-v2';
+    /** v3 reads Korean public and substitute holidays as Sunday; v2 checkpoints used calendar weekdays. */
+    modelVersion: 'public-bus-duration-v2' | 'public-bus-duration-v3' | 'seoul-bus-spatial-v3';
     target: 'bus-tag-elapsed';
     policy: 'conservative-envelope';
     evaluatedAt: number;
@@ -297,25 +338,31 @@ export interface BaseSegment {
     medianSeconds: number;
     upperSeconds: number;
   };
+  /** On the last subway leg of a run: T-DATA gate-to-gate upper bound for the whole run widened only this leg's slower bound. */
+  railEtaPrediction?: {
+    modelVersion: 'seoul-rail-gate-v1';
+    target: 'rail-gate-elapsed';
+    policy: 'conservative-envelope';
+    evaluatedAt: number;
+    enteredAt: number;
+    originName: string;
+    destinationName: string;
+    plannedSpanSeconds: number;
+    sourceDurationSeconds: DurationRange;
+    lowerSeconds: number;
+    medianSeconds: number;
+    upperSeconds: number;
+  };
   /** Source of this leg's routed geometry/time, independent of a vehicle arrival observation. */
   routingSource?: Provenance;
-  /** Provider-reported offsets between requested points and its pedestrian network. No fabricated geometry. */
-  networkSnap?: {
-    startMeters: number;
-    endMeters: number;
-    allowanceSeconds: number;
-  };
+  /** Provider-reported offsets between requested points and its pedestrian network, each at most MAX_NETWORK_SNAP_METERS. No fabricated geometry. */
+  networkSnap?: { startMeters: number; endMeters: number; allowanceSeconds: number };
   /** Required for live own-car legs: the drive ends at a generally accessible car park. */
   parkingAccess?: ParkingAccess;
   /** The provider explicitly routed this riding network; never inferred from a walking path. */
-  routingProfile?: 'bicycle' | 'scooter';
+  routingProfile?: 'bicycle' | 'scooter' | 'ebike';
   /** Operator permission bound to the specific device and checked through its planned return. */
-  rentalValidity?: {
-    verifiedAt: number;
-    validUntil: number;
-    vehicleId: string;
-    provider: string;
-  };
+  rentalValidity?: { verifiedAt: number; validUntil: number; vehicleId: string; provider: string };
   /** Seoul's current station query, not a reservation or an operator unlock permission. Recheck before pickup. */
   bicycleAvailability?: {
     source: 'seoul-bike';
@@ -403,6 +450,36 @@ export interface BaseRoute {
   timingEvaluatedAt?: number;
 }
 
+export type RouteSearchLimit =
+  'edges' | 'expansions' | 'labels' | 'legs' | 'duration' | 'comparison-results';
+/**
+ * Certificate for the fetched network and its immediate transfer rules only.
+ * It does not prove coverage of every city route or voluntary waiting strategy.
+ */
+export interface RouteSearchDiagnostics {
+  scope: 'bounded-fetched-network';
+  searchMode: 'bounded' | 'exact';
+  objective: import('./estimatedTiming.js').RoutingObjective;
+  pathDomain: 'no-repeated-transfer-node';
+  nodes: number;
+  edges: number;
+  expanded: number;
+  excludedEdges: number;
+  complete: boolean;
+  limitReached: boolean;
+  termination: 'exhausted' | 'result-bound' | 'expansion-limit' | 'stale-input';
+  limitsReached: RouteSearchLimit[];
+  omittedLabels: number;
+  bestObjectiveSeconds: number | null;
+  unexploredLowerBoundSeconds: number | null;
+  optimalityGapSeconds: number | null;
+  optimalityProven: boolean;
+  accessLimited: boolean;
+  acquisitionComplete: boolean;
+  fetchedGraphOptimalityProven: boolean;
+  fetchedGraphBestObjectiveSeconds: number | null;
+}
+
 export interface PlanningResult {
   routes: Route[];
   generatedAt: number;
@@ -412,11 +489,15 @@ export interface PlanningResult {
   notice: string;
   intelligence?: import('../intelligence/types.js').ArrivalIntelligence;
   rentalAvailability?: import('../intelligence/rentalAvailability.js').RentalAvailability;
+  search?: RouteSearchDiagnostics;
+  /** Advisory points are not validated routes from the original requested position. */
 }
 
 export type SearchResult = PlanningResult;
-
 export type ReplanReason = 'missed-vehicle' | 'no-bicycle' | 'walking-only';
+
+/** A POI inside a station, mall or campus can sit this far from the nearest walkable link (코엑스: 94 m, 서울역 around-points: 90 m). */
+export const MAX_NETWORK_SNAP_METERS = 150;
 
 export class PlanningError extends Error {
   constructor(
@@ -425,7 +506,6 @@ export class PlanningError extends Error {
     message: string,
   ) {
     super(message);
-
     this.name = 'PlanningError';
   }
 }

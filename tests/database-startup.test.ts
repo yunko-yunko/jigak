@@ -38,7 +38,12 @@ test('Nest starts against an empty database, serves readiness and preserves data
       const database = module.get(DatabaseService);
 
       assert.equal(ready.status, 200);
-      assert.deepEqual(await ready.json(), { status: 'ok', database: 'ready' });
+      // Readiness also reports the shared-mobility simulator, which is off unless MOBILITY_SIMULATION is set.
+      assert.deepEqual(await ready.json(), {
+        status: 'ok',
+        database: 'ready',
+        simulation: { enabled: false },
+      });
       assert.equal(await database.getRepository(TypeOrmMigrationHistoryEntity).count(), 1);
 
       if (boot === 0) {

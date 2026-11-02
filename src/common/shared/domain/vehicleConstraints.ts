@@ -54,7 +54,7 @@ export function hasBicycleAvailabilityEvidence(
       timeline?.latest ??
       (segment.mode === 'wait' && segment.plannedConnection
         ? segment.plannedConnection.status === 'borderline'
-          ? segment.plannedConnection.fallbackDepartureAt!
+          ? (segment.plannedConnection.fallbackDepartureAt ?? segment.plannedConnection.departureAt)
           : segment.plannedConnection.departureAt
         : latest + segment.durationSeconds.max * 1000);
 
@@ -151,13 +151,14 @@ export function hasBicycleAvailabilityEvidence(
         continue;
       } else if (
         segment.mode !== 'scooter' &&
+        segment.mode !== 'ebike' &&
         (segment.mode !== 'wait' ||
           segment.distanceMeters !== 0 ||
           !samePosition(segment.start, segment.end))
       ) {
         return false;
       } else if (
-        segment.mode === 'scooter' &&
+        (segment.mode === 'scooter' || segment.mode === 'ebike') &&
         (rental.bicycle || rental.hire.bicycleAvailability !== undefined)
       ) {
         return false;
@@ -184,9 +185,13 @@ export function validLiveVehicles(
   }
 
   if (
-    preferences.allowScooter === false &&
+    (preferences.allowScooter === false || preferences.hasScooterLicense === false) &&
     segments.some((segment) => segment.mode === 'scooter')
   ) {
+    return false;
+  }
+
+  if (preferences.allowEbike === false && segments.some((segment) => segment.mode === 'ebike')) {
     return false;
   }
 
@@ -227,7 +232,7 @@ export function validLiveVehicles(
 
   const hasHires = segments.some((segment) => segment.mode === 'hire');
   let rental: {
-    mode: 'bicycle' | 'scooter' | null;
+    mode: 'bicycle' | 'scooter' | 'ebike' | null;
     end: Place;
     permission: BaseSegment['rentalValidity'];
   } | null = null;
@@ -237,7 +242,7 @@ export function validLiveVehicles(
     const segment = segments[index];
 
     if (
-      (segment.mode === 'bicycle' || segment.mode === 'scooter') &&
+      (segment.mode === 'bicycle' || segment.mode === 'scooter' || segment.mode === 'ebike') &&
       (segment.routingProfile !== segment.mode ||
         (segment.distanceMeters > 0 && (segment.polyline?.length ?? 0) < 2))
     ) {
@@ -256,7 +261,8 @@ export function validLiveVehicles(
         timeline?.latest ??
         (segment.mode === 'wait' && segment.plannedConnection
           ? segment.plannedConnection.status === 'borderline'
-            ? segment.plannedConnection.fallbackDepartureAt!
+            ? (segment.plannedConnection.fallbackDepartureAt ??
+              segment.plannedConnection.departureAt)
             : segment.plannedConnection.departureAt
           : latest + segment.durationSeconds.max * 1000);
     }
@@ -302,7 +308,7 @@ export function validLiveVehicles(
         return false;
       }
 
-      if (segment.mode === 'bicycle' || segment.mode === 'scooter') {
+      if (segment.mode === 'bicycle' || segment.mode === 'scooter' || segment.mode === 'ebike') {
         if (rental.mode && rental.mode !== segment.mode) {
           return false;
         }
@@ -333,7 +339,10 @@ export function validLiveVehicles(
       rental.end = segment.end;
     } else if (
       hasHires &&
-      (segment.mode === 'return' || segment.mode === 'bicycle' || segment.mode === 'scooter')
+      (segment.mode === 'return' ||
+        segment.mode === 'bicycle' ||
+        segment.mode === 'scooter' ||
+        segment.mode === 'ebike')
     ) {
       return false;
     }

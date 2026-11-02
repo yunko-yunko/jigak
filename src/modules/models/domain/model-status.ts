@@ -1,5 +1,7 @@
+import { PUBLIC_BUS_MODEL_VERSION } from '../../../common/engine/intelligence/public-bus-model.js';
+
 export const unconfiguredBus = () => ({
-  version: 'public-bus-duration-v2',
+  version: PUBLIC_BUS_MODEL_VERSION,
   active: false,
   reasons: ['unconfigured'],
 });

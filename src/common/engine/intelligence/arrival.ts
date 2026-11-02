@@ -20,6 +20,7 @@ import {
   type RoutingObjective,
 } from '../../shared/domain/estimatedTiming.js';
 import { compareRouteEffort } from '../../shared/domain/routeEffort.js';
+import { boardingAccessComparator } from '../ride-identity.js';
 
 export interface ArrivalIntelligenceContext {
   objective?: RoutingObjective;
@@ -51,6 +52,7 @@ export function rankRouteIntelligence(
 
   // Old observations and conditions far from the origin never masquerade as local live weather.
   const liveWeather = localWeatherIsFresh(weather, request);
+  const access = boardingAccessComparator(request.now, objective);
 
   const assessments: ArrivalAssessment[] = routes
     .map((route): ArrivalAssessment => {
@@ -151,7 +153,7 @@ export function rankRouteIntelligence(
         }
 
         if (
-          ['bicycle', 'scooter', 'car', 'taxi'].includes(segment.mode) &&
+          ['bicycle', 'scooter', 'ebike', 'car', 'taxi'].includes(segment.mode) &&
           segment.distanceMeters > 0 &&
           (segment.polyline?.length ?? 0) < 2
         ) {
@@ -159,7 +161,7 @@ export function rankRouteIntelligence(
         }
 
         if (
-          (segment.mode === 'bicycle' || segment.mode === 'scooter') &&
+          (segment.mode === 'bicycle' || segment.mode === 'scooter' || segment.mode === 'ebike') &&
           (!('routingProfile' in segment) || segment.routingProfile !== segment.mode)
         ) {
           exclude('geometry', `${segment.title}: 해당 이동수단의 전용 경로가 확인되지 않았습니다.`);
@@ -246,14 +248,17 @@ export function rankRouteIntelligence(
       }
 
       if (
-        modes.has('scooter') &&
+        (modes.has('scooter') || modes.has('ebike')) &&
         route.risks.some(
           (risk) =>
             risk.code === 'vehicle-availability' &&
             /미확인|공개되지|앱에서 찾아|위치는 앱/.test(`${risk.title} ${risk.description}`),
         )
       ) {
-        exclude('availability', '실제 대여 기기 위치가 확인되지 않은 킥보드 경로입니다.');
+        exclude(
+          'availability',
+          `실제 대여 기기 위치가 확인되지 않은 ${modes.has('ebike') ? '전기자전거' : '킥보드'} 경로입니다.`,
+        );
       }
 
       if (
@@ -285,7 +290,10 @@ export function rankRouteIntelligence(
             ? 'scooter'
             : later
                 .slice(0, leaseEnd < 0 ? later.length : leaseEnd)
-                .find((part) => part.mode === 'bicycle' || part.mode === 'scooter')?.mode;
+                .find(
+                  (part) =>
+                    part.mode === 'bicycle' || part.mode === 'scooter' || part.mode === 'ebike',
+                )?.mode;
           const permission = segment.rentalValidity;
           const seoulStationId =
             rentalMode === 'bicycle' && segment.start.id.startsWith('ddareungi-')
@@ -296,8 +304,10 @@ export function rankRouteIntelligence(
             const kindMatches =
               rentalMode === 'scooter'
                 ? item.kind === 'kick-scooter'
-                : rentalMode === 'bicycle' &&
-                  (item.kind === 'bicycle' || item.kind === 'e-bicycle');
+                : rentalMode === 'ebike'
+                  ? item.kind === 'e-bicycle' && item.source === 'gbfs'
+                  : rentalMode === 'bicycle' &&
+                    (item.kind === 'bicycle' || item.kind === 'e-bicycle');
 
             if (!kindMatches || metersBetween(item, segment.start) > 35) {
               return false;
@@ -339,7 +349,7 @@ export function rankRouteIntelligence(
 
       const hasOutdoor = route.segments.some(
         (segment) =>
-          ['walk', 'run', 'bicycle', 'scooter'].includes(segment.mode) &&
+          ['walk', 'run', 'bicycle', 'scooter', 'ebike'].includes(segment.mode) &&
           segment.distanceMeters > 0,
       );
 
@@ -349,7 +359,7 @@ export function rankRouteIntelligence(
         const icy = (weather!.temperatureC ?? 20) <= 0 && rain;
 
         if (
-          (modes.has('scooter') || modes.has('bicycle')) &&
+          (modes.has('scooter') || modes.has('ebike') || modes.has('bicycle')) &&
           (icy || strongWind || (weather!.precipitationMm ?? 0) >= 5)
         ) {
           exclude(
@@ -360,7 +370,9 @@ export function rankRouteIntelligence(
 
         if (rain) {
           const exposedSeconds = route.segments
-            .filter((segment) => ['walk', 'run', 'bicycle', 'scooter'].includes(segment.mode))
+            .filter((segment) =>
+              ['walk', 'run', 'bicycle', 'scooter', 'ebike'].includes(segment.mode),
+            )
             .reduce((sum, segment) => sum + segment.durationSeconds.max, 0);
           const addition = prepared ? included.weather : Math.ceil(exposedSeconds * 0.15);
 
@@ -494,7 +506,7 @@ export function rankRouteIntelligence(
         explanations.unshift({
           code: 'arrival',
           severity: 'info',
-          text: `예상 소요 ${Math.ceil(estimatedSeconds / 60)}분을 기준으로 비교해요. 시간 범위의 중간값·검증된 구간 예측과 탑승 가능한 연결편을 사용하며 지연 여유는 별도로 표시해요.`,
+          text: `예상 소요 ${Math.max(1, Math.ceil((estimatedSeconds - request.preferences.preparationSeconds) / 60))}분을 기준으로 비교해요. 시간 범위의 중간값·검증된 구간 예측과 탑승 가능한 연결편을 사용하며 지연 여유는 별도로 표시해요.`,
           seconds: estimatedSeconds,
         });
       }
@@ -536,10 +548,12 @@ export function rankRouteIntelligence(
       const left = routes.find((route) => route.id === a.routeId)!,
         right = routes.find((route) => route.id === b.routeId)!;
 
+      // Equal-arrival variants of one ride: the one that reaches its boardings sooner and walks less, never the id hash.
       return (
         compareRouteEffort(left, right) ||
         left.transfers - right.transfers ||
         (left.fareWon ?? Number.MAX_SAFE_INTEGER) - (right.fareWon ?? Number.MAX_SAFE_INTEGER) ||
+        access(left, right) ||
         a.routeId.localeCompare(b.routeId)
       );
     });

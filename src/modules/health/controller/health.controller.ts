@@ -1,4 +1,5 @@
-import { Controller, Get, Inject } from '@nestjs/common';
+import { Controller, Get, Inject, Res, ServiceUnavailableException } from '@nestjs/common';
+import type { Response } from 'express';
 import { HealthService } from '../service/health.service.js';
 
 @Controller('health')
@@ -17,8 +18,14 @@ export class HealthController {
     };
   }
 
+  /** 200 when ready; 503 with what is still starting (no paths or bucket names) otherwise. */
   @Get('ready')
-  ready() {
-    return this.health.ready();
+  async ready(@Res() response: Response) {
+    try {
+      response.status(200).json(await this.health.ready());
+    } catch (error) {
+      if (!(error instanceof ServiceUnavailableException)) throw error;
+      response.status(503).json(error.getResponse());
+    }
   }
 }

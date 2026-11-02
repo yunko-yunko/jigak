@@ -1,0 +1,117 @@
+{
+  "schema": "jigak-refresh-status-v1",
+  "updatedAt": "2026-11-02T00:49:42.912+09:00",
+  "runId": "20261102T0049-6279",
+  "startedAt": 1793548182767,
+  "finishedAt": 1793548182912,
+  "outcome": "noop",
+  "exitCode": 0,
+  "mode": "local",
+  "schedule": {
+    "cron": "30 5,9,13 * * *",
+    "timeZone": "Asia/Seoul"
+  },
+  "nextScheduledAt": 1793565000000,
+  "lastRun": {
+    "runId": "20261102T0049-6279",
+    "startedAt": 1793548182767,
+    "finishedAt": 1793548182912,
+    "outcome": "noop",
+    "exitCode": 0
+  },
+  "lastSuccessfulRunAt": 1793548182912,
+  "models": {
+    "publicBus": {
+      "version": "public-bus-duration-v2",
+      "expiresAt": 1793850679674,
+      "refreshOpensAt": 1793418679674,
+      "nextAttemptAt": 1793565000000,
+      "consecutiveFailures": 0,
+      "lastFailureReason": null,
+      "lastPromotedAt": 1793547931554,
+      "state": "due",
+      "lastAttempt": null
+    },
+    "spatialBus": {
+      "version": "seoul-bus-spatial-v3",
+      "expiresAt": 1793979646882,
+      "refreshOpensAt": 1793547646882,
+      "nextAttemptAt": 1793565000000,
+      "consecutiveFailures": 0,
+      "lastFailureReason": null,
+      "lastPromotedAt": 1793547931554,
+      "state": "due",
+      "lastAttempt": null
+    },
+    "railGate": {
+      "version": "seoul-rail-gate-v1",
+      "expiresAt": 1793979901718,
+      "refreshOpensAt": 1793547901718,
+      "nextAttemptAt": 1793565000000,
+      "consecutiveFailures": 0,
+      "lastFailureReason": null,
+      "lastPromotedAt": 1793547931554,
+      "state": "due",
+      "lastAttempt": null
+    },
+    "bicycleRide": {
+      "version": "seoul-bicycle-spatial-v2",
+      "expiresAt": 1796139985214,
+      "refreshOpensAt": 1795275985214,
+      "nextAttemptAt": 1795293000000,
+      "consecutiveFailures": 0,
+      "lastFailureReason": null,
+      "lastPromotedAt": 1793548139485,
+      "lastAttemptAt": 1793548139631,
+      "state": "ok",
+      "lastAttempt": {
+        "evaluationDate": null,
+        "outcome": "promoted",
+        "reason": "promoted",
+        "at": 1793548139631,
+        "runId": "20261102T0048-1gm5"
+      }
+    },
+    "bicycleRideTimes": {
+      "version": "ddareungi-dock-pair-v1",
+      "consecutiveFailures": 0,
+      "lastFailureReason": null,
+      "lastPromotedAt": 1793547931554,
+      "state": "ok",
+      "lastAttempt": null
+    },
+    "hgb": {
+      "version": null,
+      "consecutiveFailures": 0,
+      "lastFailureReason": "no-data",
+      "state": "skipped",
+      "lastAttempt": null
+    },
+    "contextual": {
+      "version": null,
+      "consecutiveFailures": 0,
+      "lastFailureReason": "no-data",
+      "state": "skipped",
+      "lastAttempt": null
+    },
+    "journey": {
+      "version": null,
+      "consecutiveFailures": 0,
+      "lastFailureReason": "no-data",
+      "state": "skipped",
+      "lastAttempt": null
+    }
+  },
+  "calendars": {
+    "2026": {
+      "reviewAfter": "2026-12-02T00:46:25.214+09:00",
+      "source": "unofficial-cross-check"
+    },
+    "2027": {
+      "reviewAfter": "2026-11-28T00:00:00+09:00",
+      "source": "carried"
+    }
+  },
+  "alerts": [],
+  "notices": []
+}

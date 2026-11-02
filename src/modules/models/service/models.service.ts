@@ -9,6 +9,14 @@ export class ModelsService {
     return this.models.bus();
   }
 
+  all() {
+    return this.models.all();
+  }
+
+  refresh() {
+    return this.models.refresh();
+  }
+
   bicycle() {
     return this.models.bicycle();
   }

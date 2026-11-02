@@ -1,0 +1,140 @@
+{
+  "schema": "jigak-model-manifest-v1",
+  "generation": 5,
+  "updatedAt": "2026-11-02T00:48:59.485+09:00",
+  "runId": "20261102T0048-1gm5",
+  "models": {
+    "publicBus": {
+      "version": "public-bus-duration-v2",
+      "path": "models/publicBus/public-bus-duration-v2/20261029T1251-ce7bfc24794d.json",
+      "sha256": "ce7bfc24794dfe284ef55a4980b9b78348fbb3128adfc0234b36fe9e003857b8",
+      "bytes": 22436,
+      "trainedAt": 1793245879674,
+      "expiresAt": 1793850679674,
+      "evaluationDate": "2026-10-16",
+      "promotedAt": 1793547931554,
+      "runId": "20261102T0045-ac53",
+      "gates": {
+        "source": "init",
+        "from": "public-bus-operational.json"
+      },
+      "history": []
+    },
+    "spatialBus": {
+      "version": "seoul-bus-spatial-v3",
+      "path": "models/spatialBus/seoul-bus-spatial-v3/20261031T0040-5fddf255d256.json",
+      "sha256": "5fddf255d256ae92a80ef9f40eb8b77d0c09e482ebddd16c78e64ff52f0865e6",
+      "bytes": 7796223,
+      "trainedAt": 1793374846882,
+      "expiresAt": 1793979646882,
+      "evaluationDate": "2026-10-25",
+      "promotedAt": 1793547931554,
+      "runId": "20261102T0045-ac53",
+      "gates": {
+        "source": "init",
+        "from": "spatial-bus-operational.json"
+      },
+      "history": []
+    },
+    "railGate": {
+      "version": "seoul-rail-gate-v1",
+      "path": "models/railGate/seoul-rail-gate-v1/20261031T0045-c5aec8b5e64c.json",
+      "sha256": "c5aec8b5e64c2d6f578dfab9978be15866145216f2382403e8138f1f7572b493",
+      "bytes": 10033908,
+      "trainedAt": 1793375101718,
+      "expiresAt": 1793979901718,
+      "evaluationDate": "2026-10-25",
+      "promotedAt": 1793547931554,
+      "runId": "20261102T0045-ac53",
+      "gates": {
+        "source": "init",
+        "from": "rail-gate-operational.json"
+      },
+      "history": []
+    },
+    "bicycleRide": {
+      "version": "seoul-bicycle-spatial-v2",
+      "path": "models/bicycleRide/seoul-bicycle-spatial-v2/20261029T1817-7719a54ddc05.json",
+      "sha256": "7719a54ddc051662c95e5385f4d729ed0641c3d1786f080f6ee0e0d7e7bb0f17",
+      "bytes": 10613401,
+      "trainedAt": 1793265457487,
+      "expiresAt": 1796139985214,
+      "evaluationDate": "2026-06-30",
+      "promotedAt": 1793548139485,
+      "runId": "20261102T0048-1gm5",
+      "gates": {
+        "passed": true,
+        "reason": "holiday-calendar-extended",
+        "parity": {
+          "version": "seoul-bicycle-spatial-v2",
+          "output": "../../../../../../private/tmp/claude-501/-Users-dbswnstj-works-projects-digitalcontentcompetition-whale/bb563f85-02c5-45f1-870d-37f2a017ac6f/scratchpad/automodel/work/20261102T0048-1gm5/data/bicycle/checkpoint/spatial-bicycle-operational.json",
+          "bytes": 10613401,
+          "trainedAt": "2026-10-29T09:17:37.487Z",
+          "expiresAt": "2026-12-01T15:46:25.214Z",
+          "parityCases": 512,
+          "maximumFeatureError": 0,
+          "maximumSecondsError": 0,
+          "holidays": [
+            "2026-06-03",
+            "2026-06-06",
+            "2026-07-17",
+            "2026-08-15",
+            "2026-08-17",
+            "2026-09-24",
+            "2026-09-25",
+            "2026-09-26",
+            "2026-10-03",
+            "2026-10-05",
+            "2026-10-09"
+          ]
+        },
+        "retrained": false
+      },
+      "history": [
+        {
+          "version": "seoul-bicycle-spatial-v2",
+          "path": "models/bicycleRide/seoul-bicycle-spatial-v2/20261029T1817-e808d3600bbf.json",
+          "sha256": "e808d3600bbff13310962f9b3723baef5d13b74aca951652cfa1c39425393c92",
+          "bytes": 10613401,
+          "trainedAt": 1793265457487,
+          "expiresAt": 1794668400000,
+          "evaluationDate": "2026-06-30",
+          "promotedAt": 1793548122800,
+          "retiredAt": 1793548139485
+        }
+      ]
+    },
+    "bicycleRideTimes": {
+      "version": "ddareungi-dock-pair-v1",
+      "path": "models/bicycleRideTimes/ddareungi-dock-pair-v1/20261102T0045-3ce32feecad7.json",
+      "sha256": "3ce32feecad7ee1e4c8928226964e041e8a00f61c7b65eff550d2e642cae5359",
+      "bytes": 3472657,
+      "trainedAt": null,
+      "expiresAt": null,
+      "evaluationDate": null,
+      "promotedAt": 1793547931554,
+      "runId": "20261102T0045-ac53",
+      "gates": {
+        "source": "init",
+        "from": "bicycle-ride-times-202606.json"
+      },
+      "history": []
+    }
+  },
+  "calendars": {
+    "2026": {
+      "path": "calendars/korea-holidays-2026-e6bc310d4db6.json",
+      "sha256": "e6bc310d4db6b02730c43fa2ebd27c2f58b430414535463b3781c1b625ca7214",
+      "reviewAfter": "2026-12-02T00:46:25.214+09:00",
+      "verifiedAt": "2026-10-16T00:00:00+09:00",
+      "source": "unofficial-cross-check"
+    },
+    "2027": {
+      "path": "calendars/korea-holidays-2027-96a96c9b2ba9.json",
+      "sha256": "96a96c9b2ba9a9852889c7a21491047004975d9d493f01857ecc86d97fa53403",
+      "reviewAfter": "2026-11-28T00:00:00+09:00",
+      "verifiedAt": "2026-10-29T00:00:00+09:00",
+      "source": "carried"
+    }
+  }
+}

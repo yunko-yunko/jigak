@@ -38,6 +38,22 @@ export const consentSchema = z
   })
   .strict();
 
+const policyDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+/** A well-formed agreement to an earlier version: an old app build, answered with CONSENT_REQUIRED instead of a bare 400. */
+export const outdatedConsentSchema = z
+  .object({
+    termsVersion: policyDate,
+    privacyVersion: policyDate,
+    marketingConsent: z.boolean(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      [value.termsVersion, value.privacyVersion].every((version) => version <= CONSENT_VERSION) &&
+      [value.termsVersion, value.privacyVersion].some((version) => version < CONSENT_VERSION),
+  );
+
 export const nameSchema = z
   .object({
     name: z

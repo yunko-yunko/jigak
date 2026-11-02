@@ -2,7 +2,7 @@ import { requestSupplierText } from '../supplier-http.js';
 
 /** Shared JSON fetch for public transit feeds. Errors never carry keys, URLs or bodies. */
 export class FeedError extends Error {
-  constructor(readonly reason: 'timeout' | 'network' | 'status' | 'format' | 'auth') {
+  constructor(readonly reason: 'timeout' | 'network' | 'status' | 'format' | 'auth' | 'quota') {
     super(`transit feed ${reason}`);
     this.name = 'FeedError';
   }
@@ -13,10 +13,25 @@ export interface FeedOptions {
   timeoutMs?: number;
 }
 
+/** data.go.kr's spent daily request limit (HTTP 401 "서비스 요청제한 횟수 초과 에러", XML code 22), not the per-second
+ * limit (code 23), which passes in a moment. */
+export const dailyQuotaSpent = (body: string) =>
+  /요청\s*제한\s*(?:횟수\s*)?(?:을\s*)?초과|LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS/.test(
+    body,
+  ) && !/초당|PER_SECOND/.test(body);
+
+const KST_MS = 9 * 3_600_000,
+  DAY_MS = 86_400_000;
+/** The next 00:00 in Korea, when data.go.kr and the Seoul open data portal reset daily quotas. */
+export const nextKstMidnight = (at: number) =>
+  Math.floor((at + KST_MS) / DAY_MS) * DAY_MS - KST_MS + DAY_MS;
+
 export async function fetchFeedJson(
   url: URL,
   { fetcher = fetch, timeoutMs = 4_000 }: FeedOptions = {},
 ): Promise<unknown> {
+  // A spent quota and an unregistered key are both 401; only the body tells them apart.
+  let rejected = false;
   try {
     const text = await requestSupplierText({
       request: (signal) =>
@@ -27,10 +42,9 @@ export async function fetchFeedJson(
           signal,
         }),
       validateResponse(response) {
-        if (!response.ok) {
-          throw new FeedError(
-            response.status === 401 || response.status === 403 ? 'auth' : 'status',
-          );
+        rejected = response.status === 401 || response.status === 403;
+        if (!response.ok && !rejected) {
+          throw new FeedError('status');
         }
       },
       timeoutMs,
@@ -38,9 +52,19 @@ export async function fetchFeedJson(
       responseError: () => new FeedError('format'),
     });
 
+    if (rejected) {
+      throw new FeedError(dailyQuotaSpent(text) ? 'quota' : 'auth');
+    }
+
     // data.go.kr reports key problems as XML even when JSON was requested.
     if (/^\s*</.test(text)) {
-      throw new FeedError(/SERVICE_KEY|SERVICE KEY|인증/.test(text) ? 'auth' : 'format');
+      throw new FeedError(
+        dailyQuotaSpent(text)
+          ? 'quota'
+          : /SERVICE_KEY|SERVICE KEY|인증/.test(text)
+            ? 'auth'
+            : 'format',
+      );
     }
 
     try {
@@ -49,6 +73,11 @@ export async function fetchFeedJson(
       throw new FeedError('format');
     }
   } catch (error) {
+    // A rejected key whose body could not be read stays a key problem.
+    if (rejected && !(error instanceof FeedError && error.reason === 'quota')) {
+      throw new FeedError('auth');
+    }
+
     if (error instanceof FeedError) {
       throw error;
     }

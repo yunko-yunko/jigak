@@ -1,6 +1,7 @@
 import type { BasePlanningRequest, BaseRoute, BaseSegment } from '../../shared/domain/types.js';
 import type { WeatherSnapshot } from '../../shared/intelligence/types.js';
 import { metersBetween } from '../realtime/names.js';
+import { WEATHER_RECEIPT_MAX_AGE_MS } from '../realtime/weather.js';
 import { usableCalibration, type EtaCalibration } from './calibration.js';
 
 export interface PlanningTimingContext {
@@ -8,7 +9,8 @@ export interface PlanningTimingContext {
   calibration?: EtaCalibration;
 }
 
-/** A receipt never makes a stale or distant weather observation local and current. */
+/** A receipt never makes a stale or distant weather observation local and current.
+ * A receipt the weather feed still serves from its cache is the latest one; it stays usable for the cache lifetime plus the search that read it. */
 export function localWeatherIsFresh(
   weather: WeatherSnapshot | null | undefined,
   request: Pick<BasePlanningRequest, 'origin' | 'now'>,
@@ -25,7 +27,7 @@ export function localWeatherIsFresh(
     request.now - weather.observedAt <= 100 * 60_000 &&
     Number.isFinite(weather.receivedAt) &&
     weather.receivedAt <= request.now + 60_000 &&
-    request.now - weather.receivedAt <= 120_000 &&
+    request.now - weather.receivedAt <= WEATHER_RECEIPT_MAX_AGE_MS &&
     metersBetween(request.origin, weather) < 12_000
   );
 }
@@ -58,7 +60,8 @@ export function validPlanningBuffer(
 }
 
 const outdoor = (segment: BaseSegment) =>
-  ['walk', 'run', 'bicycle', 'scooter'].includes(segment.mode) && segment.distanceMeters > 0;
+  ['walk', 'run', 'bicycle', 'scooter', 'ebike'].includes(segment.mode) &&
+  segment.distanceMeters > 0;
 
 const validRange = ({ min, max }: BaseSegment['durationSeconds']) =>
   Number.isFinite(min) && Number.isFinite(max) && min >= 0 && max >= min;

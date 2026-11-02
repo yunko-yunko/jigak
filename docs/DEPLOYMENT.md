@@ -2,6 +2,8 @@
 
 이 서버는 Node.js 24.11 이상과 NestJS·TypeORM을 사용하는 API입니다. 계정, OAuth 임시 상태, 세션, 저장 이동, 문의, ETA 관측값과 contextual/journey 학습 모델을 PostgreSQL에 저장합니다. 서비스 인스턴스의 로컬 파일을 영속 저장소로 사용하지 않습니다. 이 저장소에는 배포 준비 파일만 작성되어 있으며 실제 GCP 리소스 생성이나 배포는 수행하지 않았습니다.
 
+2026-11-02 재배포(가상 차량 실규모, 예비 키, 모델·지도 자료, 배포 순서와 점검)는 [HANDOFF-2026-11-02.md](HANDOFF-2026-11-02.md)를 먼저 봅니다.
+
 ## 로컬 실행
 
 ```powershell
@@ -52,23 +54,67 @@ npm run env:deployment
 
 웹 로그인 쿠키는 기존 `SameSite=Lax` 정책을 유지합니다. 웹 앱과 API는 `app.example.com`과 `api.example.com`처럼 같은 사이트의 HTTPS 도메인에 배포합니다. 서로 다른 사이트의 프런트엔드와 `*.run.app` 조합은 교차 사이트 fetch에서 로그인 쿠키가 전달되지 않으므로, 웹 로그인용 API에는 같은 사이트의 커스텀 도메인을 연결합니다. 네이티브 앱은 Bearer 세션을 사용합니다.
 
-| 구분               | 환경변수                                                                                                                                             | 설정                                                   |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| 런타임             | `NODE_ENV`, `HOST`                                                                                                                                   | `production`, `0.0.0.0`                                |
-| Cloud Run 주입     | `PORT`                                                                                                                                               | `8080` (`--port`로 지정, env 파일에 추가하지 않음)     |
-| DB 필수            | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`                                                                                                           | Cloud SQL socket 경로, `5432`, 실제 DB/사용자          |
-| DB 비밀            | `DB_PASSWORD`                                                                                                                                        | Cloud Run 환경변수 또는 Secret Manager                 |
-| 연결 풀            | `DB_POOL_MAX`, `DB_SSL`                                                                                                                              | 예제 `5`, `false` (socket)                             |
-| 웹/인증            | `CORS_ORIGINS`, `AUTH_PUBLIC_BASE_URL`, `AUTH_WEB_RETURN_URL`                                                                                        | 실제 HTTPS URL/출처                                    |
-| 인증 비밀          | `AUTH_TOKEN_ENCRYPTION_KEY`                                                                                                                          | 32바이트 Base64 키, 배포 간 같은 값 보존               |
-| 지도               | `KAKAO_REST_API_KEY`                                                                                                                                 | 카카오 장소 검색/경로 기능에 사용                      |
-| 공공 데이터        | `DATA_GO_KR_SERVICE_KEY`, `SEOUL_OPEN_API_KEY`, `SEOUL_BIKE_API_KEY`, `SEOUL_CITY_DATA_API_KEY`, `SEOUL_PARKING_API_KEY`                             | 사용하는 공급원별 키/활용승인                          |
-| Google 로그인      | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`                                                                                               | 해당 로그인 사용 시 모두 설정                          |
-| 카카오 로그인      | `KAKAO_LOGIN_REST_API_KEY`, `KAKAO_LOGIN_CLIENT_SECRET`, `KAKAO_LOGIN_OIDC`                                                                          | 해당 로그인 사용 시 설정, OIDC는 실제 활성화 시 `true` |
-| Apple 로그인       | `APPLE_SERVICE_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY`                                                                             | 해당 로그인 사용 시 모두 설정, 개인 키는 비밀          |
-| 경로/운영          | `PEDESTRIAN_ROUTING_ENABLED`, `PEDESTRIAN_OSRM_URL`, `PEDESTRIAN_USER_AGENT`, `ROUTE_INTERMEDIATE_HUBS`, `ROUTE_CALL_LIMIT`, `ROUTE_METRICS_ENABLED` | 주석 있는 `example.env` 참조                           |
-| 추가 공유 이동수단 | `MOBILITY_GBFS_FEEDS`                                                                                                                                | 검증된 공개 HTTPS GBFS 피드 JSON 배열 또는 빈 값       |
-| 외부 검증 모델     | `ETA_MODEL_PATH`, `ETA_PUBLIC_BUS_MODEL_PATH`, `ETA_PUBLIC_BICYCLE_SHADOW_DIRECTORY`                                                                 | 읽기 전용 파일/폴더 경로 또는 빈 값                    |
+| 구분                          | 환경변수                                                                                                                                                                                                                          | 설정                                                                                                                                                            |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 런타임                        | `NODE_ENV`, `HOST`                                                                                                                                                                                                                | `production`, `0.0.0.0`                                                                                                                                         |
+| Cloud Run 주입                | `PORT`                                                                                                                                                                                                                            | `8080` (`--port`로 지정, env 파일에 추가하지 않음)                                                                                                              |
+| DB 필수                       | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`                                                                                                                                                                                        | Cloud SQL socket 경로, `5432`, 실제 DB/사용자                                                                                                                   |
+| DB 비밀                       | `DB_PASSWORD`                                                                                                                                                                                                                     | Cloud Run 환경변수 또는 Secret Manager                                                                                                                          |
+| 연결 풀                       | `DB_POOL_MAX`, `DB_SSL`                                                                                                                                                                                                           | 예제 `5`, `false` (socket)                                                                                                                                      |
+| 웹/인증                       | `CORS_ORIGINS`, `AUTH_PUBLIC_BASE_URL`, `AUTH_WEB_RETURN_URL`                                                                                                                                                                     | 실제 HTTPS URL/출처                                                                                                                                             |
+| 인증 비밀                     | `AUTH_TOKEN_ENCRYPTION_KEY`                                                                                                                                                                                                       | 32바이트 Base64 키, 배포 간 같은 값 보존                                                                                                                        |
+| 지도                          | `KAKAO_REST_API_KEY`, `KAKAO_REST_API_KEY_FALLBACK`                                                                                                                                                                               | 장소 검색/경로, 예비 키는 선택 비밀                                                                                                                             |
+| 공공 데이터                   | `DATA_GO_KR_SERVICE_KEY`, `SEOUL_OPEN_API_KEY`, `SEOUL_BIKE_API_KEY`, `SEOUL_CITY_DATA_API_KEY`, `SEOUL_PARKING_API_KEY`, `TRAFFIC_SIGNAL_API_KEY`                                                                                | 사용하는 공급원별 키/활용승인                                                                                                                                   |
+| 공공 데이터 예비 키           | `DATA_GO_KR_SERVICE_KEY_FALLBACK`, `SEOUL_OPEN_API_KEY_FALLBACK`, `DATA_GO_KR_DAILY_LIMIT`                                                                                                                                        | 일일 한도 소진 시 0시 KST까지 쓰는 선택 비밀, 버스 호출 상한(비밀 아님)                                                                                         |
+| 시간 비교                     | `OPENAI_API_KEY`, `OPENAI_MODEL`                                                                                                                                                                                                  | 빈 키는 거리와 기본 속도로 계산                                                                                                                                 |
+| Google 로그인                 | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`                                                                                                                                                                            | 해당 로그인 사용 시 모두 설정                                                                                                                                   |
+| 카카오 로그인                 | `KAKAO_LOGIN_REST_API_KEY`, `KAKAO_LOGIN_CLIENT_SECRET`, `KAKAO_LOGIN_OIDC`                                                                                                                                                       | 해당 로그인 사용 시 설정, OIDC는 실제 활성화 시 `true`                                                                                                          |
+| Apple 로그인                  | `APPLE_SERVICE_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY`                                                                                                                                                          | 해당 로그인 사용 시 모두 설정, 개인 키는 비밀                                                                                                                   |
+| 경로/운영                     | `PEDESTRIAN_ROUTING_ENABLED`, `PEDESTRIAN_OSRM_URL`, `PEDESTRIAN_USER_AGENT`, `BICYCLE_ROUTING_ENABLED`, `BICYCLE_OSRM_URL`, `ROUTE_INTERMEDIATE_HUBS`, `ROUTE_CALL_LIMIT`, `ROUTE_METRICS_ENABLED`                               | 주석 있는 `example.env` 참조                                                                                                                                    |
+| 추가 공유 이동수단            | `MOBILITY_GBFS_FEEDS`                                                                                                                                                                                                             | 검증된 공개 HTTPS GBFS 피드 JSON 배열 또는 빈 값                                                                                                                |
+| 시연용 가상 킥보드·전기자전거 | `MOBILITY_SIMULATION`, `MOBILITY_SIMULATION_FLEET`, `MOBILITY_SIMULATION_EBIKE_FLEET`, `MOBILITY_SIMULATION_SEED`                                                                                                                 | `scooter`, `ebike` 또는 `scooter,ebike`로 켬. 시연용 가상 데이터이며 실제 운영사 아님                                                                           |
+| 외부 검증 모델                | `ETA_MODEL_PATH`, `ETA_PUBLIC_BUS_MODEL_PATH`, `ETA_SPATIAL_BUS_MODEL_PATH`, `ETA_RAIL_GATE_MODEL_PATH`, `BICYCLE_RIDE_TIMES_PATH`, `ETA_SPATIAL_BICYCLE_MODEL_PATH`, `ETA_HGB_MODEL_PATH`, `ETA_PUBLIC_BICYCLE_SHADOW_DIRECTORY` | 읽기 전용 파일/폴더 경로 또는 빈 값                                                                                                                             |
+| 모델 자동 갱신                | `MODEL_MANIFEST_PATH`, `MODEL_MANIFEST_POLL_SECONDS`, `MODEL_REFRESH_STATUS_PATH`, `MODEL_REFRESH_SCHEDULE_KST`                                                                                                                   | 갱신 Job의 버킷 manifest 경로(`/models/manifest.json`)와 확인 주기. 설정하면 아래 모델 경로 대신 manifest를 따르고 재시작 없이 바뀝니다. 빈 값은 아래 고정 경로 |
+| NGII 지도                     | `MAP_NGII_PMTILES_PATH`                                                                                                                                                                                                           |
+
+### 시연용 가상 킥보드·전기자전거
+
+서울에는 공개된 공유 킥보드·공유 전기자전거 피드가 없어서, 시연용으로 가상 차량을 켤 수 있습니다. 이 데이터는 **시연용 가상 데이터**이며 실제 운영사·기기·대여가 아닙니다. 가상 운영사 하나가 킥보드와 대여소 없는 공유 전기자전거(PAS, 최고 보조 속도 25 km/h)를 함께 운영합니다. 따릉이 대여 이력(2026년 6월)의 대여소별·시간대별 이용량을 가상 수요의 위치와 시간 분포로만 사용합니다. 따릉이 실시간 재고는 실제 데이터 그대로입니다.
+
+- `MOBILITY_SIMULATION`은 `scooter`와 `ebike`(`e-bike`도 같음)를 쉼표로 적습니다. `scooter`만 쓰면 지금까지처럼 킥보드만, `scooter,ebike`면 둘 다, `ebike`면 전기자전거만 켜집니다. 대소문자와 공백은 무시하며, 빈 값이나 알 수 없는 값만 있으면 꺼짐이고, 꺼져 있으면 아래 조회는 모두 404입니다. 알 수 없는 이름(예: `scooter,bike`의 `bike`)은 무시하고 시작할 때 경고 로그 한 줄로 알립니다.
+- 대수: `MOBILITY_SIMULATION_FLEET`는 킥보드(3000~72000, 빈 값이면 14,933), `MOBILITY_SIMULATION_EBIKE_FLEET`는 전기자전거(1000~60000, 빈 값이면 52,605)입니다. 두 차종 합계는 3000~72000대여야 합니다. 수요가 서울 전역 따릉이 대여소에 퍼져 있어 3000대보다 적으면 대부분의 이용자가 주변 차량을 찾지 못하므로 합계 최소값이 3000입니다. 기본값은 서울의 실제 등록 대수와 같은 대수(실제 기기 1대 = 가상 기기 1대)입니다: 공유 킥보드 14,933대(2025년, 데일리안 2026-03-23)와 민간 공유 전기자전거 52,605대(2026년 6월, 6개 업체, 투어코리아 2026-09-14), 합계 67,538대. 더 최근 수치로 킥보드 16,055대·전기자전거 54,842대(2026년 6월, 세계일보 2026-07-05)도 있으나 참고값이며, 상한 72,000대는 이 합계(70,897대)가 들어가도록 잡았습니다. 지금 빌릴 수 있는 대수는 대수를 줄여서가 아니라 상태 모델(이용 중·충전·수리·거점 보관·야간 수거·숨김·견인 등)에서 나옵니다(설계 문서 §21).
+- 같은 대수와 `MOBILITY_SIMULATION_SEED`(기본 `jigak`)면 모든 Cloud Run 인스턴스가 같은 차량 상태를 계산합니다. Cloud Run(`K_SERVICE`가 있음)의 상한은 72,000대라 기본값(67,538대)은 자르지 않습니다. 그보다 크게 적으면 비율대로 줄이고(각 차종 최소값은 지킴) 경고 로그를 남깁니다.
+- 가상 운영사가 주차·민원·견인·고장·배터리 교체·회수·수리·재배치를 모두 계산하며, 차량 상태는 날을 넘겨 이어집니다. 3일마다 04:00(KST)에 정상 상태 견본에서 다시 시작합니다(48시간 예열 뒤 제공). 그 사이의 04:00 경계는 끊김 없이 이어지지만, 다시 시작하는 날의 04:00에는 개별 차량 위치가 한 번 다시 섞여 지도의 점이 바뀝니다. 그때 상태별 대수 차이는 fleet의 0.4% 안팎이고, 1 km 칸 대여 가능 대수의 변화는 평범한 하루치 변화보다 작습니다(측정값은 설계 문서 §18.2). 수요가 적은 달에는 가상 운영사가 fleet의 일부(가정값, 1월 12%·11월 6% 등)를 거점에 보관하므로 거리의 차량 수가 계절에 따라 달라집니다. 설계와 측정값은 `docs/2026-11-01-scooter-simulation.md`에 있습니다.
+- 하루치 계산은 작업자 스레드에서 하며 요청을 막지 않습니다. 실규모(14,933 + 52,605대)의 120시간 창 계산은 성능 작업 전 이 Mac(M5 Pro, 작업자 경유)에서 38~43초였고 목표는 25초 이하입니다. 킥보드 6,000 + 전기자전거 18,000대는 약 4.8~9.8초였습니다. 계산이나 저장된 창 적재가 끝나기 전에는 `/api/health/ready`가 503(본문의 `simulation.status`가 `building` 등)으로 답하고, Cloud Run startup probe가 그동안 이 인스턴스에 트래픽을 보내지 않습니다. 그래도 들어온 경로 검색은 응답의 `rentalAvailability`에 "대여 가능 위치·재고 미확인"(`supply-unavailable`)과 "위치를 계산하는 중" 안내를 붙이고, 지도 이동수단 조회는 "지금 가상 기기 위치를 계산하고 있어요"를 표시합니다. `MOBILITY_SIMULATION_READY_GATE=false`면 `/api/health/ready`가 DB만 확인합니다. 그동안에도 `/api/sim/*`, GBFS, 지도 이동수단 조회는 빈 목록으로 바로 답하고 계산을 기다리지 않습니다. 다음 날 계산은 05:00(KST)부터 미리 합니다. 이 계산은 요청 밖에서 돌기 때문에, 환경 파일의 `MOBILITY_SIMULATION`에 `scooter`나 `ebike`(`e-bike`)가 들어 있으면 `deploy/cloud-run.ps1`이 `--cpu 2 --no-cpu-throttling --cpu-boost`를 붙입니다(요청 기반 CPU에서는 계산이 거의 진행되지 않음, 작업자와 요청이 CPU를 하나씩 씀). CPU 상시 할당 비용이 늘어납니다. Cloud Run 1 vCPU당 계산이 이 Mac보다 느려 시작 직후 첫 창은 약 35~60초 걸릴 것으로 추정하며, 배포한 리비전에서 확인하지 않았습니다(미검증).
+- 메모리: 6,000 + 18,000대일 때 이 Mac에서 전체 서버(tsx)는 시뮬레이터 없이 398 MB, 두 창을 계산한 뒤 577 MB(최고 598 MB)였습니다. 실규모 67,538대에서는 시뮬레이터만 띄운 Node의 작업자 경유 RSS 최고값이 478~537 MB(성능 작업 전)였고, 전체 서버는 계산 중 최고 1,100 MB, 두 창을 둔 평상시 950 MB 이하를 목표로 합니다. 작업자 힙 한도와 측정값은 설계 문서 §11, §21.2에 있습니다. `deploy/cloud-run.ps1`은 `MOBILITY_SIMULATION`이 켜져 있으면 `--cpu 2 --memory 2Gi`, 꺼져 있으면 지금처럼 `--cpu 1 --memory 512Mi`로 배포합니다. Cloud Run(Linux, 컴파일된 JS)에서의 RSS와 계산 시간은 배포한 리비전에서 다시 확인해야 합니다(미검증). 창 저장소를 켜고 저장된 창이 없을 때(miss)는 작업자가 창을 압축하느라 약 80 MB를 더 씁니다(추정).
+- 창 저장소(`MOBILITY_SIMULATION_WINDOW_DIR`): 계산한 하루치 창을 `날짜_키.simwin.zst`(zstd, 실규모 약 21 MB/일)로 저장해, 재시작·재배포·새 인스턴스가 다시 계산하지 않고 읽습니다(이 Mac에서 적재 약 0.1초). 키는 모델 버전, 시뮬레이터 코드·데이터 파일 해시, 차종별 대수, seed, 날짜·창 범위의 sha-256이므로 코드나 가정값이 바뀌면 자동으로 새로 계산합니다. 읽을 때 키, 입력값, 열마다의 sha-256, zstd 체크섬을 모두 확인하고 하나라도 다르면 그 파일을 지우고 다시 계산합니다. 빈 값이면 저장하지 않습니다(기본). 로컬은 `example.env`의 `.cache/sim-windows`(git·Docker 제외)를 씁니다. Cloud Run의 로컬 디스크는 메모리이므로 서울 리전 Cloud Storage 버킷을 `/sim-windows`에 볼륨으로 붙이고 값을 `/sim-windows`로 둡니다. `deploy/cloud-run.ps1 -SimulationWindowBucket <버킷>`이 볼륨을 붙이며, 값과 버킷 중 하나만 있으면 배포 전에 멈춥니다. 버킷은 지도 타일용 공개 버킷과 따로 비공개로 만듭니다.
+
+  ```bash
+  gcloud storage buckets create gs://your-project-id-sim-windows --location=asia-northeast3 \
+    --uniform-bucket-level-access --public-access-prevention
+  # lifecycle.json: {"rule":[{"action":{"type":"Delete"},"condition":{"age":7}}]}
+  gcloud storage buckets update gs://your-project-id-sim-windows --lifecycle-file=lifecycle.json
+  gcloud storage buckets add-iam-policy-binding gs://your-project-id-sim-windows \
+    --member=serviceAccount:jigakmap-api@your-project-id.iam.gserviceaccount.com --role=roles/storage.objectUser
+  gcloud storage buckets describe gs://your-project-id-sim-windows --format='value(location)'  # ASIA-NORTHEAST3
+  ```
+
+  서버는 어제~모레 날짜의 파일만 남기고, 같은 날짜의 옛 키는 하루가 지나면, 12개를 넘으면 오래된 날짜부터 지웁니다. 버킷의 7일 lifecycle이 한 번 더 지웁니다. Cloud Storage FUSE 읽기·쓰기 시간은 배포한 리비전에서 확인하지 않았습니다(미검증).
+
+- 시뮬레이터를 켜면 `deploy/cloud-run.ps1`이 `--min-instances 1`(직접 지정은 `-MinInstances`)과 `/api/health/ready` startup probe(5초 간격, 최대 300초)를 붙입니다. probe는 시뮬레이터를 꺼도 붙습니다. 상시 1대 비용은 하루 약 3~4달러로 추정합니다(미검증). 창 저장 버킷이 없으면 새 인스턴스마다 창을 직접 계산하므로 심사 기간에는 `MaxInstances = 2` 이하를 권장합니다.
+- 켜면 지도 이동수단 조회에 `시연용 가상 킥보드`·`시연용 가상 전기자전거` 표시가 붙은 차량이 나오고, 경로 검색은 이 차량으로 킥보드·전기자전거 구간을 만들 수 있습니다(가상 요금: 킥보드 잠금 해제 1,000원·분당 150원, 전기자전거 잠금 해제 600원(00~06시 1,000원)·분당 160원, 잠금 해제 30초·반납 45초). 경로 구간에는 `simulated: true` 출처가 붙습니다.
+- 읽기 전용 조회(공개 요청 한도 적용): `GET /api/sim/status`(상태별 대수, 오늘 집계, 작업조, 차종별 `byType`), `GET /api/sim/events`(`since` 또는 `cursor`, `limit` 1~500, `types`, `vehicleTypes`=`kick-scooter`·`e-bike`, `lat`·`lon`·`radius`. 차량이 있는 사건에는 `vehicleType`), `GET /api/sim/crews`(작업조·거점·보관소, 차종별 적재·재고), `GET /api/sim/gbfs/gbfs.json`, `system_information.json`, `vehicle_types.json`(`sim-kick-scooter`, `sim-e-bike`), `vehicle_status.json`(선택: `lat`, `lon`, `radius`. 조건이 없으면 거리의 차량 전부, 봉투에 `total`·`truncated`). GBFS v3.0 형식을 따르지만 실제 운영사 피드가 아닙니다. 요청 한도는 `/api/sim/*` 경로마다 따로 분당 60회입니다(mvp 서버도 같음). 금액·범칙금·견인은 모두 가정값이며 실제 법령·조례 금액과 다를 수 있습니다.
+
+### NGII 1:1,000 지도
+
+`seoul-ngii-v1.pmtiles`(국토지리정보원 수치지형도)는 국외 반출 금지 자료라 **API 서버를 거쳐서만** 제공합니다. 공개 버킷, 다른 리전, CDN에는 두지 않습니다.
+
+- 서울 리전 비공개 버킷(`--public-access-prevention`, 런타임 서비스 계정만 `roles/storage.objectViewer`)에 올리고, `deploy/cloud-run.ps1 -MapBucket <버킷>`으로 읽기 전용 `/maps`에 붙입니다. 이때 `MAP_NGII_PMTILES_PATH`는 정확히 `/maps/seoul-ngii-v1.pmtiles`여야 합니다. 둘 중 하나만 있거나 `-Region`이 `asia-northeast3`가 아니면 스크립트가 멈춥니다.
+- `GET`/`HEAD /api/maps/seoul-ngii-v1.pmtiles`는 Range 요청 하나만 받습니다. 한 번에 512 KiB까지이고, Range가 없거나 여러 구간이거나 더 크면 400, 파일 끝을 넘으면 416(`Content-Range: bytes */크기`)입니다. 끝이 열린 Range(`bytes=N-`)는 512 KiB로 잘라 줍니다. Range 없는 `HEAD`는 크기만 알려 주고 본문이 없습니다. 파일 전체를 한 번에 주는 응답은 없습니다.
+- 응답은 `Cache-Control: private, max-age=300`, 크기와 수정 시각으로 만든 강한 `ETag`를 붙입니다. IP마다 분당 600회 제한(PostgreSQL 공유)입니다.
+- 브라우저 출처는 `CORS_ORIGINS`와 앱 지도 프레임의 `Origin: null`만 받고 쿠키는 받지 않습니다.
+- 변수가 비어 있으면 404(`MAP_NOT_CONFIGURED`), 파일을 읽지 못하면 503(`MAP_UNAVAILABLE`)이고 서버는 그대로 시작합니다. `GET /api/health`의 `maps.ngii`가 `configured`, `available`을 알려 줍니다(경로는 보이지 않습니다).
+- 앱 빌드는 `EXPO_PUBLIC_MAP_NGII_TILES_URL=https://<API 도메인>/api/maps/seoul-ngii-v1.pmtiles`를 씁니다. 출처 표기 `© 국토지리정보원 수치지형도`는 앱에 있습니다.
 
 `AUTH_DATABASE_PATH`, `ETA_OBSERVATION_DATABASE_PATH`, `ETA_CONTEXT_MODEL_PATH`, `ETA_JOURNEY_MODEL_PATH`는 폐기되었습니다. 해당 데이터는 Cloud SQL을 사용합니다. 기존 SQLite 데이터/JSON 모델 파일이 자동 이관된 것으로 간주하지 말고 실제 데이터 이관 계획을 세웁니다.
 
@@ -89,10 +135,17 @@ $deployment = @{
   AuthEncryptionKeySecret = 'jigakmap-auth-encryption-key:1'
   SecretBindings = @{
     KAKAO_REST_API_KEY = 'jigakmap-kakao-rest-key:1'
+    # 선택: 기본 키가 한도에 걸리거나 거부될 때 쓰는 예비 카카오 키입니다. 빼면 예비 키 없이 동작합니다.
+    KAKAO_REST_API_KEY_FALLBACK = 'jigakmap-kakao-rest-key-spare:1'
     DATA_GO_KR_SERVICE_KEY = 'jigakmap-data-go-kr-key:1'
+    # 선택: 다른 공공데이터포털 계정의 예비 키입니다. 버스 오퍼레이션 일일 한도를 다 쓰면 0시 KST까지 이 키로 넘깁니다.
+    DATA_GO_KR_SERVICE_KEY_FALLBACK = 'jigakmap-data-go-kr-key-spare:1'
     # 필요한 서울 데이터/API/OAuth 비밀을 같은 방식으로 추가합니다.
   }
-  MaxInstances = 10
+  MaxInstances = 10  # 시뮬레이터를 켜고 창 저장 버킷이 없으면 2 이하 권장
+  MinInstances = -1  # 자동: 시뮬레이터를 켜면 1, 아니면 0
+  SimulationWindowBucket = 'your-project-id-sim-windows'  # 시뮬레이터 창 저장소(서울 리전). 빈 값이면 볼륨 없음
+  MapBucket = 'your-project-id-ngii-kr'  # NGII 지도 비공개 버킷(서울 리전), 읽기 전용 /maps. 빈 값이면 NGII 지도 없음
   AllowUnauthenticated = $true
 }
 .\deploy\cloud-run.ps1 @deployment -PlanOnly
@@ -111,6 +164,9 @@ $deployment = @{
 - 연결 수 예산은 서비스 인스턴스 수 × `DB_POOL_MAX`에 migration Job과 배포 중 구/신 리비전의 여유를 더해 정합니다. 예제 상한은 인스턴스 10개 × 풀 5개이며 실제 DB 사양에 맞춰 조정합니다.
 - Cloud SQL 백업/PITR과 비밀 버전 보존을 구성합니다. 서비스 이미지를 되돌리는 것만으로 DB 스키마가 되돌아가지 않으므로 이후 마이그레이션은 이전 리비전과 호환되도록 작성합니다.
 - 공개 FOSSGIS 보행 서버의 제한은 인스턴스 전체에서 공유되지 않습니다. 여러 Cloud Run 인스턴스를 운영하면 자체 OSRM endpoint와 적절한 호출량 제한을 사용합니다.
+- 시뮬레이터를 켰다면 두 번째 배포 뒤 `GET /api/health`의 `simulation.source`가 `store`인지(저장된 창을 읽었는지), `simulation.windowStore`가 `configured`인지 확인합니다. 창 저장 버킷의 위치가 `ASIA-NORTHEAST3`인지도 확인합니다.
+- 운영 모델(버스·지하철·따릉이)과 공휴일 달력은 직접 올리지 않고 자동 갱신 Job이 서울 버킷에 쓰며 서비스는 그 버킷을 읽기 전용 `/models`로 붙여 manifest를 따릅니다. 만들기·배포·경보·롤백은 `docs/MODEL-REFRESH.md`, 배포 스크립트는 `deploy/model-refresh-job.sh`(기본은 계획 출력만), 서비스에 붙이는 인자는 `cloud-run.ps1 -ModelBucket`입니다. 확인은 `GET /api/health`의 `modelRefresh.status`(`ok`가 정상)입니다.
+- 갱신 Job의 코드와 이미지는 이 저장소의 `model-refresh/`에 있습니다(Node + Python 이미지, `docker build -f model-refresh/Dockerfile .`). API 이미지(`./Dockerfile`)와 빌드(`npm run build`)는 `model-refresh/`를 포함하지 않고, API 이미지에는 Python이 없습니다. `main` 푸시로 API를 배포하는 트리거에는 `ignoredFiles: model-refresh/**`를 두고, Job 이미지는 `model-refresh/cloudbuild.trigger.yaml`을 쓰는 별도 트리거로 만듭니다(포함 파일 목록은 `docs/MODEL-REFRESH.md` "이미지 자동 빌드"). Job 테스트는 `npm run test:model-refresh`, 타입 검사는 `npm run typecheck:model-refresh`입니다(Python `numpy`·`scikit-learn` 필요).
 - 외부 검증 모델을 쓰려면 검증된 파일을 컨테이너/읽기 전용 볼륨에 별도 제공하고 해당 절대 경로를 설정합니다. 기본 이미지는 임의 모델을 포함하지 않습니다. 학습 관측값과 contextual/journey 모델의 정상 저장 위치는 PostgreSQL입니다.
 
 ## 시작 실패 진단

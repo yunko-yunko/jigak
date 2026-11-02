@@ -5,6 +5,7 @@ import { validateEnvironment } from '../config/environment.js';
 import { ApiExceptionFilter } from './api-exception.filter.js';
 import { RateLimitService } from './rate-limit.service.js';
 import { ApiError } from '../errors.js';
+import { isMapArchivePath, mapArchiveCorsHeaders } from '../../modules/maps/domain/map-archive.js';
 
 /** Also used by HTTP integration tests; Nest is created with bodyParser:false. */
 export function configureApplication(app: INestApplication, env: NodeJS.ProcessEnv = process.env) {
@@ -26,7 +27,13 @@ export function configureApplication(app: INestApplication, env: NodeJS.ProcessE
       request.method === 'POST' &&
       /^\/api\/auth\/apple\/callback\/?$/.test(request.path) &&
       request.is('application/x-www-form-urlencoded');
-    if (origin && !appleForm) {
+    // The NGII archive has its own CORS: the map frame's opaque origin, Range, no credentials.
+    const mapCors =
+      origin && isMapArchivePath(request.path) && mapArchiveCorsHeaders(origin, allowed);
+    if (mapCors) {
+      for (const [name, value] of Object.entries(mapCors)) response.setHeader(name, value);
+      response.vary('Origin');
+    } else if (origin && !appleForm) {
       if (!allowed.has(origin)) {
         next(
           new ApiError(

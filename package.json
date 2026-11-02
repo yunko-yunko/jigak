@@ -17,7 +17,15 @@
     "test": "node --import tsx --test --test-concurrency=2 tests/*.test.ts",
     "migration:run": "node --env-file-if-exists=.env dist/common/database/migrate.js",
     "env:deployment": "node scripts/deployment-env.mjs",
-    "migration:generate": "node --env-file-if-exists=.env --import tsx ./node_modules/typeorm/cli.js migration:generate -d src/common/database/cli-data-source.ts"
+    "migration:generate": "node --env-file-if-exists=.env --import tsx ./node_modules/typeorm/cli.js migration:generate -d src/common/database/cli-data-source.ts",
+    "models:refresh": "node --env-file-if-exists=.env --import tsx model-refresh/scripts/models-refresh.ts",
+    "models:store:init": "node --import tsx model-refresh/scripts/models-refresh.ts init",
+    "models:store:bundle": "node --import tsx model-refresh/scripts/models-refresh.ts bundle",
+    "models:rollback": "node --import tsx model-refresh/scripts/models-refresh.ts rollback",
+    "models:manifest:verify": "node --import tsx model-refresh/scripts/models-refresh.ts verify",
+    "holidays:refresh": "node --env-file-if-exists=.env --import tsx model-refresh/scripts/generate-korean-holidays.ts",
+    "test:model-refresh": "npm --prefix model-refresh test",
+    "typecheck:model-refresh": "tsc -p model-refresh/tsconfig.json"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.0",

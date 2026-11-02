@@ -1,0 +1,18 @@
+{
+  "dataset": "서울교통공사_환승역거리 소요시간 정보",
+  "catalogUrl": "https://www.data.go.kr/data/15044419/fileData.do",
+  "downloadUrl": "https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=FILE_000000003619893&fileDetailSn=1&insertDataPrcus=N",
+  "catalogReferenceDate": "2026-08-31",
+  "catalogModifiedDate": "2026-09-10",
+  "downloadedFilename": "서울교통공사_환승역거리 소요시간 정보_20251231.csv",
+  "downloadedFilenameReferenceDate": "2025-12-31",
+  "retrievedAt": "2026-10-15T02:51:58.616Z",
+  "sha256": "434216e2c26fa7149ae7566badfa9938f87e83f28deb542aab68e1b10a9dc822",
+  "originalEncoding": "euc-kr",
+  "rowCount": 145,
+  "timeFormat": "mm:ss",
+  "distanceUnit": "meter",
+  "method": "최단 환승 동선을 측정한 거리에 평균 보행속도 1.2m/s를 적용한 참고시간. 실측 개인속도, 실시간 혼잡도, 시설 운영 상태가 아님.",
+  "dateMismatch": "카탈로그 제목 기준일은 2026-08-31이나 실제 다운로드 Content-Disposition 파일명은 2025-12-31. 파일 내용의 최신 조사일을 독립 확인할 수 없어 파일 날짜를 보수적으로 표시함.",
+  "license": "공공데이터포털 이용허락범위 제한없음. 서울교통공사 원천 출처를 표시함."
+}

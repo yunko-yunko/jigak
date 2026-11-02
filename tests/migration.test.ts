@@ -289,7 +289,12 @@ const runtimeAssets = [
   'modules/learning/repository/schema.sql',
   'common/engine/connectivity/data/seoul-metro-transfers.csv',
   'common/engine/connectivity/data/seoul-metro-transfers.metadata.json',
+  'common/engine/connectivity/data/seoul-station-access-v1.json',
+  'common/engine/realtime/data/bus-headways-202610.json',
   'common/engine/realtime/data/korea-holidays-2026.json',
+  'common/engine/realtime/data/korea-holidays-2027.json',
+  'common/engine/realtime/data/shared-mobility-demand-v1.json',
+  'common/engine/realtime/data/seoul-pm-parking-rules-v1.json',
 ];
 
 test('compiled deployment includes TypeORM migrations and immutable reference assets', async (t) => {
