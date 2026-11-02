@@ -12,12 +12,12 @@
 - 코드: `git clone https://github.com/USWA-Ulsan-Small-Whale-Assosiation/jigak-backend.git && cd jigak-backend` (`main`). 이미 있으면 `git checkout main && git pull`.
 - 사용자에게 받는 것:
 
-| 받는 것                                                                     | 쓰는 곳                                                                                                                                                            |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `maps-20261102.zip`                                                         | 5번(OSM 상세 지도, NGII 지도)                                                                                                                                      |
-| `model-store-bootstrap/` 폴더                                               | 6번(첫 세대). 사용자가 모노레포에서 `npm --prefix jigak-backend run models:store:bundle -- --out <폴더>`로 만든 것입니다. git과 zip에는 없습니다                   |
-| 비밀 값                                                                     | 3번, 6번                                                                                                                                                           |
-| `models-20261102.zip`, `ngii-derived-20261102.zip`, `OSRM.md`, `SHA256SUMS` | 자동 갱신이 안 될 때의 수동 대체(SG 4-4), NGII 보행 가중치(선택), 자체 OSRM(선택, SG 2-5). 받은 폴더에서 `shasum -a 256 -c SHA256SUMS`로 받은 파일이 OK인지 봅니다 |
+| 받는 것                                                                     | 쓰는 곳                                                                                                                                                                                |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maps-20261102.zip`                                                         | 5번(OSM 상세 지도, NGII 지도)                                                                                                                                                          |
+| `model-store-bootstrap-20261102.zip`                                        | 6번(첫 세대). 풀면 `model-store-bootstrap/` 폴더가 나옵니다. 사용자가 모노레포에서 `npm --prefix jigak-backend run models:store:bundle -- --out <폴더>`로 만든 것이고 git에는 없습니다 |
+| 비밀 값                                                                     | 3번, 6번                                                                                                                                                                               |
+| `models-20261102.zip`, `ngii-derived-20261102.zip`, `OSRM.md`, `SHA256SUMS` | 자동 갱신이 안 될 때의 수동 대체(SG 4-4), NGII 보행 가중치(선택), 자체 OSRM(선택, SG 2-5). 받은 폴더에서 `shasum -a 256 -c SHA256SUMS`로 받은 파일이 OK인지 봅니다                     |
 
 번들이 맞는지 확인합니다. `operational/`에 모델 5개, `references/spatialBus/`와 `references/railGate/`에 `<sha256>.json`이 하나씩, `context/`에 2개가 있어야 합니다. `references/`가 비어 있으면 첫 세대부터 재검증이 되지 않으니 사용자에게 다시 만들어 달라고 합니다.
 
