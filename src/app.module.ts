@@ -12,6 +12,7 @@ import { ModelsModule } from './modules/models/models.module.js';
 import { TravelTimesModule } from './modules/travel-times/travel-times.module.js';
 import { SimulationModule } from './modules/simulation/simulation.module.js';
 import { MapsModule } from './modules/maps/maps.module.js';
+import { LegalModule } from './modules/legal/legal.module.js';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { MapsModule } from './modules/maps/maps.module.js';
     TravelTimesModule,
     SimulationModule,
     MapsModule,
+    LegalModule,
   ],
   providers: [RateLimitService],
 })

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>위치정보 이용 안내 · 지각지도</title>
+  <meta name="description" content="위치는 이용자가 요청한 경로 계산과 별도로 허용한 이동 안내 중 자동 감지에 사용합니다. 위치 권한을 허용하지 않아도 장소를 직접 선택할 수 있습니다.">
+  <link rel="icon" href="../assets/icon.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <link rel="stylesheet" href="../styles.css?v=1102b">
+</head>
+<body class="legal-page">
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><symbol id="mark" viewBox="22 4 76 110"><path d="M60 15.5V26.5" stroke="currentColor" stroke-width="7" stroke-linecap="round"/><rect x="49.5" y="8.5" width="21" height="8.5" rx="4.25" fill="currentColor"/><path d="M81.92 36.08L87.29 30.71" stroke="currentColor" stroke-width="8" stroke-linecap="round"/><path d="M33.81 80.46A34.5 34.5 0 1 1 86.19 80.46L62.43 108.17A3.2 3.2 0 0 1 57.57 108.17ZM81.5 58A21.5 21.5 0 1 0 38.5 58A21.5 21.5 0 1 0 81.5 58Z" fill="currentColor" fill-rule="evenodd"/><path d="M60 58L67.25 45.44" stroke="#111317" stroke-width="6.2" stroke-linecap="round"/><circle cx="60" cy="58" r="5.8" fill="#111317"/></symbol></defs></svg>
+  <a class="skip" href="#main">본문으로 건너뛰기</a>
+  <header class="nav is-solid">
+    <div class="nav-inner">
+      <a class="brand" href="../index.html" aria-label="지각지도 처음으로"><svg class="brand-mark" aria-hidden="true"><use href="#mark"/></svg><span>지각지도</span></a>
+      <nav class="nav-links" aria-label="주요 메뉴">
+        <a href="../index.html#how">찾는 방식</a>
+        <a href="../index.html#modes">이동수단</a>
+        <a href="../index.html#live">실시간</a>
+        <a href="../index.html#guide">이동 안내</a>
+      </nav>
+      <a class="btn btn-small" href="../index.html#download">앱 받기</a>
+    </div>
+  </header>
+
+  <main id="main" class="legal">
+    <nav class="legal-tabs" aria-label="약관과 정책"><a href="terms.html">이용약관</a><a href="privacy.html">개인정보 처리방침</a><a href="location.html" aria-current="page">위치정보 이용 안내</a><a href="licenses.html">오픈소스 및 출처</a></nav>
+    <header class="legal-head">
+      <h1>위치정보 이용 안내</h1>
+      <p class="legal-intro">위치는 이용자가 요청한 경로 계산과 별도로 허용한 이동 안내 중 자동 감지에 사용합니다. 위치 권한을 허용하지 않아도 장소를 직접 선택할 수 있습니다.</p>
+      <p class="legal-version">시행일 2026-11-02 · 앱 안의 문서와 같은 버전입니다.</p>
+    </header>
+    <div class="legal-body">
+      <aside class="legal-toc" aria-label="목차">
+        <p>목차</p>
+        <ol>
+            <li><a href="#s1">언제 위치를 확인하나요?</a></li>
+            <li><a href="#s2">어디에 전달되나요?</a></li>
+            <li><a href="#s3">기기에 남는 정보</a></li>
+            <li><a href="#s4">권한과 안내 종료</a></li>
+        </ol>
+      </aside>
+      <article class="legal-article">
+          <section class="legal-section" id="s1">
+            <h2>언제 위치를 확인하나요?</h2>
+            <p>현재 위치를 출발지로 선택할 때, 현재 위치로 다시 경로를 찾을 때 전경 위치를 확인합니다. 자동 감지를 켠 이동 안내 중에는 위치와 기기 활동 정보를 확인합니다. 백그라운드 위치 권한을 허용하면 화면이 꺼져도 확인하며, 안내를 끝내거나 감지를 끄면 중지합니다.</p>
+          </section>
+          <section class="legal-section" id="s2">
+            <h2>어디에 전달되나요?</h2>
+            <p>경로 검색·재탐색 때 선택한 좌표는 지각지도 경로 서버와 필요한 카카오 경로 API, FOSSGIS의 OpenStreetMap/OSRM 보행망·자전거망 서버에 전달됩니다. 보행망 조회에는 출발·환승·도착 지점만, 자전거망 조회에는 따릉이 대여소 위치만 사용합니다. 자동 감지의 연속 GPS와 활동 자료는 기기에서만 처리하며 서버로 보내지 않습니다. 위치 오차가 150m를 초과하면 정확한 장소를 직접 고르도록 안내합니다. 검색할 때 서버 계정의 위치 이력에 자동 저장하지 않으며, 회원 계정으로 경로 기록을 별도 저장한 경우에는 해당 경로의 좌표가 포함될 수 있습니다.</p>
+          </section>
+          <section class="legal-section" id="s3">
+            <h2>기기에 남는 정보</h2>
+            <p>자동 감지의 원본 GPS 표본은 메모리에서만 처리합니다. 현재 이동의 경로·단계·마지막 감지 결과는 기기에 잠시 보관하고 안내 종료·감지 끄기 때 삭제합니다. 현재 위치를 포함한 경로를 별도로 저장하거나 최근 검색에 남기면 좌표가 기기 기록에 포함될 수 있습니다. 개인정보와 기기 데이터 화면에서 해당 기록을 삭제할 수 있습니다.</p>
+          </section>
+          <section class="legal-section" id="s4">
+            <h2>권한과 안내 종료</h2>
+            <p>기기 설정에서 위치 권한을 끌 수 있습니다. 앱으로 돌아오면 운행·교통 자료를 다시 불러옵니다. 앱 강제 종료나 절전 정책으로 감지가 중단될 수 있습니다. 잠금 화면의 표시는 마지막으로 확인한 상태이므로 실시간 위치나 정확한 도착 시각을 의미하지 않습니다.</p>
+          </section>
+      </article>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <div class="f-brand"><svg class="brand-mark" aria-hidden="true"><use href="#mark"/></svg><span>지각지도</span></div>
+      <p class="f-org">울산작은고래지킴이협회 · 2026 디지털 콘텐츠 개발대회 생활 부문 출품작</p>
+      <nav class="f-links" aria-label="약관과 정책">
+        <a href="terms.html">이용약관</a>
+        <a href="privacy.html"><b>개인정보 처리방침</b></a>
+        <a href="location.html">위치정보 이용 안내</a>
+        <a href="licenses.html">오픈소스 및 출처</a>
+      </nav>
+      <p class="f-credit">지도 Protomaps © OpenStreetMap 기여자 · 국토지리정보원 · 서울특별시 공공데이터 · 기상청</p>
+    </div>
+  </footer>
+  <script>document.querySelector('.legal-tabs [aria-current]')?.scrollIntoView({ inline: 'center', block: 'nearest' });</script>
+</body>
+</html>
