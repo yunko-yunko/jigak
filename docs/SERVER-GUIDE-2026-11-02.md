@@ -87,7 +87,7 @@ npm ci && npm run build && npm test
 | 이름                                     | 필수       | 용도                                                                     |
 | ---------------------------------------- | ---------- | ------------------------------------------------------------------------ |
 | `KAKAO_REST_API_KEY`                     | 필수       | 장소·길찾기                                                              |
-| `KAKAO_REST_API_KEY_FALLBACK`            | 선택(권장) | 기본 키가 한도·거부일 때의 예비 키. 로그인 키와 별개                     |
+| `KAKAO_REST_API_KEY_SUB`            | 선택(권장) | 기본 키가 한도·거부일 때의 예비 키. 로그인 키와 별개                     |
 | `DATA_GO_KR_SERVICE_KEY`                 | 필수       | 서울 버스, TAGO 버스                                                     |
 | `DATA_GO_KR_SERVICE_KEY_FALLBACK`        | 선택(권장) | 다른 공공데이터포털 계정의 키. 버스 일일 한도를 다 쓰면 0시 KST까지 사용 |
 | `SEOUL_OPEN_API_KEY`                     | 필수       | 지하철 실시간                                                            |
@@ -231,7 +231,7 @@ $deployment = @{
   DbPasswordSecret = '<비밀>:<버전>'; AuthEncryptionKeySecret = '<비밀>:<버전>'
   SecretBindings = @{
     KAKAO_REST_API_KEY = '<비밀>:<버전>'
-    KAKAO_REST_API_KEY_FALLBACK = 'jigakmap-kakao-rest-key-spare:1'
+    KAKAO_REST_API_KEY_SUB = 'jigakmap-kakao-rest-key-spare:1'
     DATA_GO_KR_SERVICE_KEY = '<비밀>:<버전>'
     DATA_GO_KR_SERVICE_KEY_FALLBACK = 'jigakmap-data-go-kr-key-spare:1'
     SEOUL_OPEN_API_KEY = '<비밀>:<버전>'

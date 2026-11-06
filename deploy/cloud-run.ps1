@@ -4,7 +4,7 @@ Build, migrate, and deploy the API using existing GCP resources.
 .DESCRIPTION
 Run with -PlanOnly to review commands. This script never creates databases, IAM
 bindings, or secrets. SecretBindings values are SECRET_NAME:VERSION references,
-never secret contents. KAKAO_REST_API_KEY_FALLBACK (the spare Kakao key) is a secret too:
+never secret contents. KAKAO_REST_API_KEY_SUB (the spare Kakao key) is a secret too:
 bind it here, never in the environment file. The same holds for DATA_GO_KR_SERVICE_KEY_FALLBACK and
 SEOUL_OPEN_API_KEY_FALLBACK, the spare keys used once a daily quota is spent. It stops before service deployment if migration fails.
 #>

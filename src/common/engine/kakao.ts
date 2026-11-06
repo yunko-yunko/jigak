@@ -381,7 +381,7 @@ function responseProblem(): ApiError {
   );
 }
 
-/** What a non-2xx status means for the caller. The body is Kakao's own explanation and is only logged. */
+/** What a non-2xx status means before inspecting Kakao's quota code in the error body. */
 function httpFailure(status: number): ApiError {
   if (status === 401)
     return new ApiError(
@@ -1121,8 +1121,8 @@ export class KakaoProvider implements RouteProvider {
         },
         validateResponse(response) {
           status = response.status;
-          // A spent quota arrives as 400 with code -10 in the body, read below.
-          if (response.status === 400 && pathname.startsWith('/v2/routing/')) return;
+          // Quota classification needs the body, so keep these reads within the full transport deadline.
+          if (status === 400 || status === 429) return;
           if (!response.ok) {
             try {
               sideBody = response.clone();
@@ -1143,19 +1143,8 @@ export class KakaoProvider implements RouteProvider {
           ),
         responseError: responseProblem,
       });
-      if (status === 400) {
+      if (status === 400 || status === 429) {
         detail = kakaoErrorDetail(text);
-        if (detail.code === -10) {
-          // Daily quotas reset at midnight in Korea.
-          const day = 86_400_000,
-            offset = 9 * 3_600_000,
-            error = quotaSpent();
-          this.keyClosed.set(`${slot.name}:${pathname}`, {
-            until: Math.floor((Date.now() + offset) / day) * day + day - offset,
-            error,
-          });
-          throw error;
-        }
         throw httpFailure(status);
       }
       try {
@@ -1164,14 +1153,27 @@ export class KakaoProvider implements RouteProvider {
         throw responseProblem();
       }
     } catch (error) {
-      const failure =
-        error instanceof ApiError
-          ? error
-          : new ApiError(
-              'PROVIDER_UNAVAILABLE',
-              '카카오 지도에 연결하지 못했어요. 네트워크 상태를 확인해 주세요.',
-            );
+      let failure =
+        // A 429 already proves a limit even when its body stalls or cannot be read.
+        status === 429
+          ? httpFailure(status)
+          : error instanceof ApiError
+            ? error
+            : new ApiError(
+                'PROVIDER_UNAVAILABLE',
+                '카카오 지도에 연결하지 못했어요. 네트워크 상태를 확인해 주세요.',
+              );
       if (sideBody) detail = await errorBodyDetail(sideBody);
+      if ((status === 400 || status === 429) && detail.code === -10) {
+        // Every Kakao API can report a spent daily quota; skip this key until midnight in Korea.
+        const day = 86_400_000,
+          offset = 9 * 3_600_000;
+        failure = quotaSpent();
+        this.keyClosed.set(`${slot.name}:${pathname}`, {
+          until: Math.floor((Date.now() + offset) / day) * day + day - offset,
+          error: failure,
+        });
+      }
       if (!(error instanceof ApiError)) {
         const cause =
           error instanceof Error ? (error as { cause?: { code?: unknown } }).cause : undefined;

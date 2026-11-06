@@ -63,7 +63,7 @@ npm run env:deployment
 | 연결 풀                       | `DB_POOL_MAX`, `DB_SSL`                                                                                                                                                                                                           | 예제 `5`, `false` (socket)                                                                                                                                      |
 | 웹/인증                       | `CORS_ORIGINS`, `AUTH_PUBLIC_BASE_URL`, `AUTH_WEB_RETURN_URL`                                                                                                                                                                     | 실제 HTTPS URL/출처                                                                                                                                             |
 | 인증 비밀                     | `AUTH_TOKEN_ENCRYPTION_KEY`                                                                                                                                                                                                       | 32바이트 Base64 키, 배포 간 같은 값 보존                                                                                                                        |
-| 지도                          | `KAKAO_REST_API_KEY`, `KAKAO_REST_API_KEY_FALLBACK`                                                                                                                                                                               | 장소 검색/경로, 예비 키는 선택 비밀                                                                                                                             |
+| 지도                          | `KAKAO_REST_API_KEY`, `KAKAO_REST_API_KEY_SUB`                                                                                                                                                                               | 장소 검색/경로, 예비 키는 선택 비밀                                                                                                                             |
 | 공공 데이터                   | `DATA_GO_KR_SERVICE_KEY`, `SEOUL_OPEN_API_KEY`, `SEOUL_BIKE_API_KEY`, `SEOUL_CITY_DATA_API_KEY`, `SEOUL_PARKING_API_KEY`, `TRAFFIC_SIGNAL_API_KEY`                                                                                | 사용하는 공급원별 키/활용승인                                                                                                                                   |
 | 공공 데이터 예비 키           | `DATA_GO_KR_SERVICE_KEY_FALLBACK`, `SEOUL_OPEN_API_KEY_FALLBACK`, `DATA_GO_KR_DAILY_LIMIT`                                                                                                                                        | 일일 한도 소진 시 0시 KST까지 쓰는 선택 비밀, 버스 호출 상한(비밀 아님)                                                                                         |
 | 시간 비교                     | `OPENAI_API_KEY`, `OPENAI_MODEL`                                                                                                                                                                                                  | 빈 키는 거리와 기본 속도로 계산                                                                                                                                 |
@@ -76,6 +76,8 @@ npm run env:deployment
 | 외부 검증 모델                | `ETA_MODEL_PATH`, `ETA_PUBLIC_BUS_MODEL_PATH`, `ETA_SPATIAL_BUS_MODEL_PATH`, `ETA_RAIL_GATE_MODEL_PATH`, `BICYCLE_RIDE_TIMES_PATH`, `ETA_SPATIAL_BICYCLE_MODEL_PATH`, `ETA_HGB_MODEL_PATH`, `ETA_PUBLIC_BICYCLE_SHADOW_DIRECTORY` | 읽기 전용 파일/폴더 경로 또는 빈 값                                                                                                                             |
 | 모델 자동 갱신                | `MODEL_MANIFEST_PATH`, `MODEL_MANIFEST_POLL_SECONDS`, `MODEL_REFRESH_STATUS_PATH`, `MODEL_REFRESH_SCHEDULE_KST`                                                                                                                   | 갱신 Job의 버킷 manifest 경로(`/models/manifest.json`)와 확인 주기. 설정하면 아래 모델 경로 대신 manifest를 따르고 재시작 없이 바뀝니다. 빈 값은 아래 고정 경로 |
 | NGII 지도                     | `MAP_NGII_PMTILES_PATH`                                                                                                                                                                                                           |
+
+`KAKAO_REST_API_KEY_SUB`는 기본 키의 한도 소진·거부 시 해당 API 요청을 재시도하는 보조 키입니다. 이전 이름 `KAKAO_REST_API_KEY_FALLBACK`도 지원하며, 두 값이 모두 있으면 `KAKAO_REST_API_KEY_SUB`를 우선 사용합니다.
 
 ### 시연용 가상 킥보드·전기자전거
 
@@ -136,7 +138,7 @@ $deployment = @{
   SecretBindings = @{
     KAKAO_REST_API_KEY = 'jigakmap-kakao-rest-key:1'
     # 선택: 기본 키가 한도에 걸리거나 거부될 때 쓰는 예비 카카오 키입니다. 빼면 예비 키 없이 동작합니다.
-    KAKAO_REST_API_KEY_FALLBACK = 'jigakmap-kakao-rest-key-spare:1'
+    KAKAO_REST_API_KEY_SUB = 'jigakmap-kakao-rest-key-spare:1'
     DATA_GO_KR_SERVICE_KEY = 'jigakmap-data-go-kr-key:1'
     # 선택: 다른 공공데이터포털 계정의 예비 키입니다. 버스 오퍼레이션 일일 한도를 다 쓰면 0시 KST까지 이 키로 넘깁니다.
     DATA_GO_KR_SERVICE_KEY_FALLBACK = 'jigakmap-data-go-kr-key-spare:1'

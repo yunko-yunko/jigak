@@ -102,7 +102,8 @@ export class RuntimeRepository {
 
     const provider = new KakaoProvider({
       key: env.KAKAO_REST_API_KEY,
-      fallbackKey: env.KAKAO_REST_API_KEY_FALLBACK,
+      // Keep existing deployments working while preferring the current spare-key variable.
+      fallbackKey: env.KAKAO_REST_API_KEY_SUB?.trim() || env.KAKAO_REST_API_KEY_FALLBACK,
     });
     // Batching only shares the public server's one-request-a-second slot, and its calls are what the
     // search budget protects. A self-hosted server answers at once and has no quota to spend.

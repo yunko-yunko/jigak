@@ -1,4 +1,4 @@
-// Spare Kakao REST key (KAKAO_REST_API_KEY_FALLBACK): per API failover, midnight reset, no key in errors.
+// Spare Kakao REST key (KAKAO_REST_API_KEY_SUB): per API failover, midnight reset, no key in errors.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CallBudget } from '../src/common/engine/call-budget.js';
@@ -74,6 +74,122 @@ test('a spent primary quota on one API moves only that API to the spare key', as
   const { apis } = kakao.activeKeySlots();
   assert.equal(apis['/v2/routing/publictraffic'], 'fallback');
   assert.equal(apis['/v2/local/search/keyword.json'], 'primary');
+});
+
+test('Local and Directions quota errors switch to the spare until midnight, then retry the primary', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-06T12:00:00+09:00') });
+  const cases: [string, (provider: KakaoProvider) => Promise<unknown>][] = [
+    ['/v2/local/search/keyword.json', (provider) => provider.searchPlaces({ q: '서울역' })],
+    [
+      '/v2/local/search/address.json',
+      (provider) => provider.searchPlaces({ q: '서울특별시 중구 세종대로 110' }),
+    ],
+    ['/v2/local/geo/coord2address.json', (provider) => provider.reverseGeocode(request.origin)],
+    ['/v1/directions', (provider) => provider.driving(request, new CallBudget(10))],
+  ];
+  for (const status of [400, 429]) {
+    for (const [path, run] of cases) {
+      t.mock.timers.setTime(Date.parse('2026-11-06T12:00:00+09:00'));
+      const { calls, fetcher } = fake((calledPath, slot) =>
+        calledPath === path && slot === 'primary'
+          ? json({ code: -10, msg: 'API limit has been exceeded.' }, status)
+          : ok(calledPath),
+      );
+      const kakao = new KakaoProvider({ key: PRIMARY, fallbackKey: SPARE, fetcher });
+      await run(kakao);
+      t.mock.timers.setTime(Date.parse('2026-11-06T23:59:59+09:00'));
+      await run(kakao);
+      assert.deepEqual(
+        calls.filter((call) => call.path === path).map((call) => call.slot),
+        ['primary', 'spare', 'spare'],
+        `${path} HTTP ${status}: the spent primary stays skipped past the short rate-limit cooldown`,
+      );
+      t.mock.timers.setTime(Date.parse('2026-11-07T00:00:00+09:00'));
+      await run(kakao);
+      assert.deepEqual(
+        calls
+          .filter((call) => call.path === path)
+          .slice(-2)
+          .map((call) => call.slot),
+        ['primary', 'spare'],
+      );
+    }
+  }
+});
+
+test('a quota body arriving after the diagnostic timeout still switches to the spare', async () => {
+  for (const status of [400, 429]) {
+    const { calls, fetcher } = fake((path, slot) =>
+      slot === 'primary'
+        ? new Response(
+            new ReadableStream<Uint8Array>({
+              async start(controller) {
+                await new Promise((resolve) => setTimeout(resolve, 250));
+                controller.enqueue(new TextEncoder().encode(JSON.stringify({ code: -10 })));
+                controller.close();
+              },
+            }),
+            { status, headers: { 'Content-Type': 'application/json' } },
+          )
+        : ok(path),
+    );
+    const kakao = new KakaoProvider({
+      key: PRIMARY,
+      fallbackKey: SPARE,
+      fetcher,
+      timeoutMs: 1_000,
+    });
+    await kakao.searchPlaces({ q: '서울역' });
+    assert.deepEqual(
+      calls.map((call) => call.slot),
+      ['primary', 'spare'],
+    );
+    assert.equal(kakao.activeKeySlots().apis['/v2/local/search/keyword.json'], 'fallback');
+  }
+});
+
+test('a stalled 429 body still hands over to the spare within the transport deadline', async () => {
+  const { calls, fetcher } = fake((path, slot) =>
+    slot === 'primary' ? new Response(new ReadableStream<Uint8Array>(), { status: 429 }) : ok(path),
+  );
+  const kakao = new KakaoProvider({ key: PRIMARY, fallbackKey: SPARE, fetcher, timeoutMs: 25 });
+  await kakao.searchPlaces({ q: '서울역' });
+  assert.deepEqual(
+    calls.map((call) => call.slot),
+    ['primary', 'spare'],
+  );
+});
+
+test('a 429 without a daily quota code uses the spare briefly and retries the primary after cooldown', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-06T12:00:00+09:00') });
+  const { calls, fetcher } = fake((path, slot) =>
+    slot === 'primary' ? json({ message: 'Too many requests' }, 429) : ok(path),
+  );
+  const kakao = new KakaoProvider({ key: PRIMARY, fallbackKey: SPARE, fetcher });
+  await kakao.searchPlaces({ q: '서울역' });
+  t.mock.timers.tick(59_999);
+  await kakao.searchPlaces({ q: '서울역' });
+  assert.deepEqual(
+    calls.map((call) => call.slot),
+    ['primary', 'spare', 'spare'],
+  );
+  t.mock.timers.tick(1);
+  await kakao.searchPlaces({ q: '서울역' });
+  assert.deepEqual(
+    calls.slice(-2).map((call) => call.slot),
+    ['primary', 'spare'],
+  );
+});
+
+test('invalid Local input does not switch to the spare key', async () => {
+  const { calls, fetcher } = fake(() => json({ code: -2, msg: 'wrong input' }, 400));
+  const kakao = new KakaoProvider({ key: PRIMARY, fallbackKey: SPARE, fetcher });
+  await assert.rejects(kakao.searchPlaces({ q: '서울역' }), code('PROVIDER_UNAVAILABLE'));
+  assert.deepEqual(
+    calls.map((call) => call.slot),
+    ['primary'],
+  );
+  assert.equal(kakao.activeKeySlots().apis['/v2/local/search/keyword.json'], 'primary');
 });
 
 test('a spare key rejected for Directions leaves the primary serving it', async () => {

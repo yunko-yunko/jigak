@@ -45,7 +45,7 @@ gcloud run services describe $SERVICE --region $REGION --format='value(spec.temp
 | Secret Manager 비밀                                                                                               | 서비스 환경변수                                                                                                                  | 비고                                                                              |
 | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | (지금 쓰는 것)                                                                                                    | `KAKAO_REST_API_KEY`, `DATA_GO_KR_SERVICE_KEY`, `SEOUL_OPEN_API_KEY`, DB 비밀번호, `AUTH_TOKEN_ENCRYPTION_KEY` 외 지금 붙은 전부 | 7번에서 **모두 다시** 적습니다. 아래 `describe`로 이름:버전을 봅니다              |
-| `jigakmap-kakao-rest-key-spare`, `jigakmap-data-go-kr-key-spare`, `jigakmap-seoul-open-api-key-spare` (새로 만듦) | `KAKAO_REST_API_KEY_FALLBACK`, `DATA_GO_KR_SERVICE_KEY_FALLBACK`, `SEOUL_OPEN_API_KEY_FALLBACK`                                  | 선택이지만 권장. 11/01에 노출된 예비 Kakao 키는 쓰지 않고 새로 받은 값을 넣습니다 |
+| `jigakmap-kakao-rest-key-spare`, `jigakmap-data-go-kr-key-spare`, `jigakmap-seoul-open-api-key-spare` (새로 만듦) | `KAKAO_REST_API_KEY_SUB`, `DATA_GO_KR_SERVICE_KEY_FALLBACK`, `SEOUL_OPEN_API_KEY_FALLBACK`                                  | 선택이지만 권장. 11/01에 노출된 예비 Kakao 키는 쓰지 않고 새로 받은 값을 넣습니다 |
 | `data-go-kr-service-key` (6번 스크립트가 만듦)                                                                    | Job의 `DATA_GO_KR_SERVICE_KEY`                                                                                                   | 갱신 Job 전용. 값은 6번에서 넣습니다                                              |
 
 ```bash
@@ -140,7 +140,7 @@ $deployment = @{
     DATA_GO_KR_SERVICE_KEY = '<비밀>:<버전>'
     SEOUL_OPEN_API_KEY = '<비밀>:<버전>'
     # SEOUL_BIKE_API_KEY, SEOUL_CITY_DATA_API_KEY, TRAFFIC_SIGNAL_API_KEY 등 지금 붙은 나머지도 같은 형식으로
-    KAKAO_REST_API_KEY_FALLBACK = 'jigakmap-kakao-rest-key-spare:1'
+    KAKAO_REST_API_KEY_SUB = 'jigakmap-kakao-rest-key-spare:1'
     DATA_GO_KR_SERVICE_KEY_FALLBACK = 'jigakmap-data-go-kr-key-spare:1'
     SEOUL_OPEN_API_KEY_FALLBACK = 'jigakmap-seoul-open-api-key-spare:1'
   }
