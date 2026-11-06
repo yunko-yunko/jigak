@@ -1,12 +1,13 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, relative, resolve } from 'node:path';
-import { promote, readManifest, revalidate, type Manifest } from './manifest';
+import { parseKoreanHolidayFiles, type KoreanHolidayCalendar } from '../../../src/common/engine/intelligence/korean-holidays';
+import { promote, readManifest, revalidate, revalidateWithExtendedCalendar, type Manifest } from './manifest';
 import { compareRailGate, compareSpatialBus, writeRailGatePredictions, writeSpatialBusPredictions, type IncumbentComparison, type IncumbentGate } from './incumbent';
 import { childEnv, copyTree, listFiles, runLogged, stageFile, type StepResult, type StepRunner } from './process';
 import { planRouteTables, publicBusReproducible, trainingWindow } from './schedule';
 import { JOURNALS, Store, type ModelKey } from './store';
-import type { TaimsIndex, TaimsIndexEntry } from './taims';
+import { hasStationTable, type TaimsIndex, type TaimsIndexEntry } from './taims';
 import { DAY, errorMessage, kstDate, readJson, sha256File, sha256Text, writeAtomic, writeJsonAtomic, type Logger } from './util';
 
 export type RouteTablePolicy = 'strict' | 'nearest-consistent';
@@ -237,7 +238,9 @@ export async function attemptBusGroup(ctx: RunContext, options: { evaluationDate
     const incumbentText = async (key: ModelKey) => { const entry = manifest?.models[key]; return entry ? readFile(store.path(entry.path), 'utf8') : null; };
     if (pending.includes('publicBus')) record.members.publicBus = await publicBusMember(ctx, { candidate, work, contextJsonl, priors, report, sources, incumbent: await incumbentText('publicBus'), E, inputsSha256 });
     if (pending.includes('spatialBus')) record.members.spatialBus = await spatialBusMember(ctx, { candidate, work, contextJsonl, report, window, incumbent: await incumbentText('spatialBus'), publicBusIncumbent: await incumbentText('publicBus'), E, inputsSha256 });
-    if (pending.includes('railGate')) record.members.railGate = await railGateMember(ctx, { candidate, work, zipPaths, referencePaths, stations, window, incumbent: await incumbentText('railGate'), E, inputsSha256 });
+    if (pending.includes('railGate')) record.members.railGate = await railGateMember(ctx, { candidate, work, zipPaths, referencePaths, stations, window, incumbent: await incumbentText('railGate'), E, inputsSha256,
+      missingStationTables: entries.filter(entry => !hasStationTable(entry)).map(entry => entry.serviceDate),
+      stationTables: [...entries, ...references].filter(hasStationTable).length });
     record.status = 'finished';
     if (pending.some(key => record.members[key]?.status === 'failed')) { record.status = 'open'; countCrash(); }
     return record;
@@ -291,8 +294,13 @@ async function spatialBusMember(ctx: RunContext, a: { candidate: string; work: s
   return withReference(ctx, 'spatialBus', text, ['--input', a.contextJsonl, '--window', a.window.spatialBusWindow], await promoteMember(ctx, 'spatialBus', text, a.E, { quality: 'passed', parity: promoted.json, incumbent: comparison }));
 }
 
-async function railGateMember(ctx: RunContext, a: { candidate: string; work: string; zipPaths: string[]; referencePaths: string[]; stations: string; window: ReturnType<typeof trainingWindow>; incumbent: string | null; E: string; inputsSha256: string }): Promise<MemberOutcome> {
+async function railGateMember(ctx: RunContext, a: { candidate: string; work: string; zipPaths: string[]; referencePaths: string[]; stations: string; window: ReturnType<typeof trainingWindow>; incumbent: string | null; E: string; inputsSha256: string;
+  /** Service days of the window published without the subway station table (DV), and how many staged archives carry one. */
+  missingStationTables: string[]; stationTables: number }): Promise<MemberOutcome> {
   const railJsonl = resolve(a.work, 'rail.jsonl'), chains = resolve(a.work, 'chains.jsonl');
+  // A day without the station table borrows the nearest one in the window (nearest-consistent only); with none to borrow the day is blocked by its data.
+  if (a.missingStationTables.length && ctx.routeTablePolicy !== 'nearest-consistent') return { status: 'blocked', reason: `station-table-missing:${a.missingStationTables.join(',')}` };
+  if (!a.stationTables) return { status: 'blocked', reason: 'station-table-unavailable' };
   const prepared = await stage(ctx, a.candidate, 'prepare-rail', a.inputsSha256, [railJsonl, `${railJsonl}.manifest.json`], async () => {
     for (const path of [railJsonl, chains, `${railJsonl}.manifest.json`, `${chains}.manifest.json`]) await rm(path, { force: true });
     const policy = ctx.routeTablePolicy === 'nearest-consistent' ? ['--route-table-policy', 'nearest-consistent', ...a.referencePaths.flatMap(path => ['--route-table-reference', path])] : [];
@@ -301,7 +309,7 @@ async function railGateMember(ctx: RunContext, a: { candidate: string; work: str
     const manifest = JSON.parse(await readFile(`${railJsonl}.manifest.json`, 'utf8'));
     const perDay = Object.fromEntries((manifest.archives as { sourceDate: string; counts?: Record<string, number>; railRows?: number }[]).map(archive => [archive.sourceDate, archive.railRows ?? archive.counts?.railRows ?? null]));
     await rm(chains, { force: true });
-    return { railRows: manifest.railRows as number, perDay, routeNumberFallbacks: manifest.routeNumberFallbacks ?? [] };
+    return { railRows: manifest.railRows as number, perDay, routeNumberFallbacks: manifest.routeNumberFallbacks ?? [], stationTableFallbacks: manifest.stationTableFallbacks ?? [] };
   }).catch(error => ({ error: errorMessage(error) }));
   if ('error' in prepared) return { status: 'failed', reason: prepared.error };
   if (prepared.railRows < MIN_RAIL_ROWS_PER_DAY * a.window.dates.length / 2) return { status: 'blocked', reason: `rail-rows-below-floor:${prepared.railRows}` };
@@ -389,22 +397,100 @@ export async function incumbentGate(ctx: RunContext, key: 'spatialBus' | 'railGa
 export async function keepIncumbent(ctx: RunContext, key: ModelKey, incumbentText: string | null, evaluationDate: string, lost: MemberOutcome, comparison: IncumbentComparison | null,
   measure: () => Promise<IncumbentGate>): Promise<MemberOutcome> {
   if (!incumbentText) return lost;
+  // Kept on a refusal too: retryCalendarExtension finishes a calendar-end refusal later only for the bytes this gate measured.
+  let evidence: Record<string, unknown> | null = null;
+  const incumbentSha256 = sha256Text(incumbentText);
   try {
-    const gate = await measure(), evidence = { candidateLost: lost.reason, comparison: summarize(comparison), incumbentGate: gate };
+    const gate = await measure();
+    evidence = { candidateLost: lost.reason, comparison: summarize(comparison), incumbentGate: gate };
     if (!gate.passed) {
       ctx.log('WARNING', 'incumbent-not-revalidated', { model: key, evaluationDate, failed: gate.failed });
       return { ...lost, details: { ...lost.details, ...evidence, comparison: comparison ?? undefined } };
     }
-    const result = await revalidate(ctx.store, key, { runId: ctx.runId, now: ctx.now(), evaluationDate, sha256: sha256Text(incumbentText), candidate: lost.reason, evidence });
-    const { clippedBy = null, calendarLastDate = null } = result.record;
+    const request = { runId: ctx.runId, now: ctx.now(), evaluationDate, sha256: incumbentSha256, candidate: lost.reason, evidence };
+    const result = await revalidate(ctx.store, key, request).catch(async (error) => {
+      // The file's holiday slice was the only limit: re-cut it from this run's reviewed calendars and extend the same model.
+      if (!errorMessage(error).startsWith('revalidation-limit-reached:calendar-end')) throw error;
+      const extended = await revalidateWithExtendedCalendar(ctx.store, key, { ...request, holidays: await runHolidays(ctx) });
+      await carryReference(ctx.store, key, request.sha256, extended.entry.sha256).catch(problem => ctx.log('WARNING', 'reference-not-carried', { model: key, reason: errorMessage(problem) }));
+      return extended;
+    });
+    const { clippedBy = null, calendarLastDate = null, calendarExtended = null } = result.record;
     ctx.log('NOTICE', 'model-revalidated', { model: key, version: result.entry.version, sha256: result.entry.sha256, previousExpiresAt: result.record.previousExpiresAt, expiresAt: result.entry.expiresAt, clippedBy, calendarLastDate,
-      generation: result.manifest.generation, evaluationDate, candidateLost: lost.reason });
+      calendarExtended, generation: result.manifest.generation, evaluationDate, candidateLost: lost.reason });
     return { status: 'revalidated', reason: lost.reason, details: { sha256: result.entry.sha256, previousExpiresAt: result.record.previousExpiresAt, expiresAt: result.entry.expiresAt, clippedBy, calendarLastDate,
-      generation: result.manifest.generation, revalidationCount: result.entry.revalidationCount, evaluationDate, incumbentGate: gate, comparison: summarize(comparison) } };
+      ...(calendarExtended ? { calendarExtended } : {}), generation: result.manifest.generation, revalidationCount: result.entry.revalidationCount, evaluationDate, incumbentGate: gate, comparison: summarize(comparison) } };
   } catch (error) {
     ctx.log('WARNING', 'incumbent-revalidation-refused', { model: key, evaluationDate, reason: errorMessage(error) });
-    return { ...lost, reason: `${lost.reason}+revalidation-refused:${errorMessage(error)}`.slice(0, 240) };
+    return { ...lost, reason: `${lost.reason}+revalidation-refused:${errorMessage(error)}`.slice(0, 240),
+      ...(evidence ? { details: { ...lost.details, ...evidence, comparison: comparison ?? undefined, incumbentSha256 } } : {}) };
   }
+}
+/** The refusal keepIncumbent records when the holiday slice in the file was the only thing that stopped the extension. */
+const CALENDAR_END_REFUSAL = '+revalidation-refused:revalidation-limit-reached:calendar-end';
+
+/**
+ * A run with no new evaluation day can still finish an extension an earlier day earned: the model in service passed every group
+ * of the gate on that day (incumbentGate.passed) and was refused only because of the holiday slice in its file. If the manifest
+ * entry has not changed since that attempt, the slice is re-cut from this run's reviewed calendars and the expiry extended
+ * (revalidateWithExtendedCalendar), and the attempt's member is recorded as revalidated. Nothing is retrained or re-measured.
+ */
+export async function retryCalendarExtension(ctx: RunContext, key: 'spatialBus' | 'railGate'): Promise<MemberOutcome | null> {
+  const manifest = await readManifest(ctx.store), entry = manifest?.models[key], directory = ctx.store.path('candidates', 'bus');
+  if (!entry || !existsSync(directory)) return null;
+  // The newest day on which this member reached a verdict decides; an older refusal never outlives a newer measurement.
+  let found: { path: string; record: AttemptRecord; member: MemberOutcome } | null = null;
+  for (const date of (await readdir(directory)).sort().reverse()) {
+    const path = resolve(directory, date, 'attempt.json'), record = await readAttempt(path), member = record?.members[key];
+    if (!record || !member) continue;
+    // A verdict on the model in service: it was promoted over, re-validated, or measured by the gate (refusals keep that).
+    const measured = member.status === 'promoted' || member.status === 'revalidated' || !!(member.details as { incumbentGate?: unknown } | undefined)?.incumbentGate
+      || member.reason.includes('+revalidation-refused:');
+    if (!measured) continue;
+    found = { path, record, member }; break;
+  }
+  if (!found || found.member.status !== 'closed' || !found.member.reason.includes(CALENDAR_END_REFUSAL)) return null;
+  const { record, member } = found, details = (member.details ?? {}) as { incumbentGate?: { passed?: boolean }; incumbentSha256?: string; comparison?: unknown };
+  // keepIncumbent asks for an extension only after the gate passed, so the refusal itself says so; a recorded gate must agree.
+  if (details.incumbentGate && details.incumbentGate.passed !== true) return null;
+  // Only for the very bytes the gate measured: by sha when recorded, else (records written before it was) no change since.
+  if (details.incumbentSha256 ? details.incumbentSha256 !== entry.sha256 : entry.promotedAt > record.updatedAt || (entry.revalidatedAt ?? 0) > record.updatedAt) return null;
+  const lost = member.reason.slice(0, member.reason.indexOf(CALENDAR_END_REFUSAL));
+  try {
+    const result = await revalidateWithExtendedCalendar(ctx.store, key, { runId: ctx.runId, now: ctx.now(), evaluationDate: record.evaluationDate, sha256: entry.sha256, candidate: lost,
+      evidence: { candidateLost: lost, comparison: details.comparison ?? null, incumbentGate: details.incumbentGate, retriedFromAttempt: record.evaluationDate }, holidays: await runHolidays(ctx) });
+    await carryReference(ctx.store, key, entry.sha256, result.entry.sha256).catch(problem => ctx.log('WARNING', 'reference-not-carried', { model: key, reason: errorMessage(problem) }));
+    const outcome: MemberOutcome = { status: 'revalidated', reason: lost, details: { sha256: result.entry.sha256, previousExpiresAt: result.record.previousExpiresAt, expiresAt: result.entry.expiresAt,
+      clippedBy: result.record.clippedBy ?? null, calendarLastDate: result.record.calendarLastDate ?? null, calendarExtended: result.record.calendarExtended, generation: result.manifest.generation,
+      revalidationCount: result.entry.revalidationCount, evaluationDate: record.evaluationDate, incumbentGate: details.incumbentGate, retriedFromAttempt: record.evaluationDate } };
+    record.members[key] = outcome; await saveAttempt(ctx, found.path, record);
+    ctx.log('NOTICE', 'model-revalidated', { model: key, version: result.entry.version, sha256: result.entry.sha256, previousExpiresAt: result.record.previousExpiresAt, expiresAt: result.entry.expiresAt,
+      calendarExtended: result.record.calendarExtended, generation: result.manifest.generation, evaluationDate: record.evaluationDate, retried: true });
+    return outcome;
+  } catch (error) {
+    ctx.log('WARNING', 'calendar-extension-retry-refused', { model: key, evaluationDate: record.evaluationDate, reason: errorMessage(error) });
+    return null;
+  }
+}
+
+/** Same file names holiday-env.ts registers (not imported: it registers JIGAK_HOLIDAY_DIR globally as a side effect). */
+const HOLIDAY_FILE = /^korea-holidays-\d{4}\.json$/;
+/** The reviewed calendars this run materialised for its child steps (JIGAK_HOLIDAY_DIR), read the same way they read them. */
+export async function runHolidays(ctx: Pick<RunContext, 'holidayDir'>): Promise<KoreanHolidayCalendar> {
+  const names = (await readdir(ctx.holidayDir)).filter(name => HOLIDAY_FILE.test(name)).sort();
+  if (!names.length) throw new Error('holiday-calendar-missing');
+  return parseKoreanHolidayFiles(await Promise.all(names.map(name => readFile(resolve(ctx.holidayDir, name), 'utf8'))));
+}
+
+/** A calendar-extended file is the same model under new bytes: its re-validation reference (training split) moves with it. */
+async function carryReference(store: Store, key: ModelKey, fromSha256: string, toSha256: string) {
+  const from = referencePath(store, key, fromSha256), to = referencePath(store, key, toSha256);
+  if (!existsSync(from) || existsSync(to)) return;
+  const body = JSON.parse(await readFile(from, 'utf8')) as Record<string, unknown>;
+  if (body.checkpointSha256 !== fromSha256) return;
+  // The gate (incumbent-gate.py) and bundles (init.ts) accept a reference only for the bytes it names.
+  await mkdir(dirname(to), { recursive: true });
+  await writeAtomic(to, JSON.stringify({ ...body, checkpointSha256: toSha256, carriedFromCheckpointSha256: fromSha256 }) + '\n');
 }
 const summarize = (comparison: IncumbentComparison | null) => comparison ? { reason: comparison.reason, commonRows: comparison.commonRows, candidate: comparison.candidate, incumbent: comparison.incumbent } : null;
 

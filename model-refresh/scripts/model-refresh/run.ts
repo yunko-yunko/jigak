@@ -3,10 +3,10 @@ import { mkdir, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { effectiveExpiry, readManifest, writeManifest, type Manifest } from './manifest';
 import { materializeCalendars, refreshHolidayCalendars, type FetchLike, type HolidayRefreshResult } from './holidays';
-import { attemptBicycle, attemptBusGroup, bicycleDue, openAttemptDates, pullJournals, usedEvaluationDates, type AttemptRecord, type MemberOutcome, type RunContext } from './pipelines';
+import { attemptBicycle, attemptBusGroup, bicycleDue, openAttemptDates, pullJournals, retryCalendarExtension, usedEvaluationDates, type AttemptRecord, type MemberOutcome, type RunContext } from './pipelines';
 import { chooseEvaluationDate, nextScheduledAt, planRouteTables, publicBusReproducible, SCHEDULE, trainingWindow, weeklyTiming, ALERT_REMAINING_HOURS, BICYCLE_RENEW_DAYS } from './schedule';
 import { acquireLock, heartbeat, HEARTBEAT_MS, MODEL_KEYS, releaseLock, Store, type ModelKey } from './store';
-import { downloadArchive, fetchCatalog, headBytes, pruneArchives, readTaimsIndex, writeTaimsIndex, RETAIN_SERVICE_DAYS, type CatalogEntry, type TaimsIndex } from './taims';
+import { downloadArchive, fetchCatalog, headBytes, pruneArchives, readTaimsIndex, writeTaimsIndex, MEMBER_RULE, RETAIN_SERVICE_DAYS, type CatalogEntry, type TaimsIndex } from './taims';
 import { createLogger, DAY, errorMessage, HOUR, kstIso, readJson, writeAtomic, writeJsonAtomic, type Logger } from './util';
 import type { StepRunner } from './process';
 
@@ -121,6 +121,13 @@ export async function runRefresh(options: RefreshOptions): Promise<RefreshReport
       } else for (const key of weekly) if (timings[key].due) report.models[key].action = `blocked:${choice.reason}`;
       if (!plan) { report.taims.pruned = await pruneArchives(store, index, RETAIN_SERVICE_DAYS); await writeTaimsIndex(store, index, runId); }
     }
+    // An extension an earlier day earned but the holiday slice in the file refused: finish it now that the calendar reaches further.
+    if (!plan) for (const key of ['railGate', 'spatialBus'] as const) {
+      // Not after this run's own verdict on a new day (retryCalendarExtension also reads the attempt this run just saved).
+      if (!wants(key) || ['promoted', 'revalidated', 'closed'].includes(report.models[key]?.outcome?.status ?? '')) continue;
+      const retried = await retryCalendarExtension(ctx, key);
+      if (retried) report.models[key] = { ...(report.models[key] ?? { due: true, action: 'calendar-extension' }), outcome: retried };
+    }
     for (const key of ['hgb', 'contextual', 'journey']) report.models[key] = { due: false, action: 'skipped:no-data', details: { note: key === 'hgb' ? 'no trip records' : 'retrained inside the server when consented trips arrive' } };
 
     // Alerts: a weekly model within 48 h (or expired) that this run did not refresh.
@@ -183,8 +190,10 @@ async function acquire(ctx: RunContext, report: RefreshReport, index: TaimsIndex
     if (index.archives[entry.name]?.zipOk) continue;
     let bytes: number;
     try { bytes = await headBytes(entry.url, fetchImpl); } catch (error) { report.taims.problems.push(`head:${entry.name}:${errorMessage(error)}`); continue; }
-    // An archive refused for its members is not fetched again until T-DATA publishes a different size.
-    if (index.archives[entry.name]?.lastHeadBytes === bytes && index.archives[entry.name]?.zipOk === false) continue;
+    // An archive refused for its members is not fetched again until T-DATA publishes a different size, unless an older member
+    // rule refused it: TAIMS_20261106 was refused under rule 1 for lacking the station table that rule 2 no longer requires.
+    const refused = index.archives[entry.name];
+    if (refused?.zipOk === false && refused.lastHeadBytes === bytes && (refused.memberRule ?? 1) === MEMBER_RULE) continue;
     if (bytes > budget) { report.notices.push(`download-cap-reached:${entry.name}`); break; }
     budget -= bytes; report.taims.plannedDownloads.push({ name: entry.name, bytes });
     if (ctx.plan) continue;
@@ -192,12 +201,12 @@ async function acquire(ctx: RunContext, report: RefreshReport, index: TaimsIndex
       const downloaded = await downloadArchive(ctx.store, entry, bytes, { fetchImpl, log: ctx.log });
       index.archives[entry.name] = downloaded; report.taims.downloaded.push(entry.name); report.taims.downloadBytes += bytes;
       await writeTaimsIndex(ctx.store, index, ctx.runId);
-      ctx.log('INFO', 'taims-downloaded', { archive: entry.name, bytes, hasRouteTable: downloaded.hasRouteTable, serviceDate: downloaded.serviceDate });
+      ctx.log('INFO', 'taims-downloaded', { archive: entry.name, bytes, hasRouteTable: downloaded.hasRouteTable, hasStationTable: downloaded.hasStationTable, serviceDate: downloaded.serviceDate });
     } catch (error) {
       const reason = errorMessage(error);
       report.taims.problems.push(`download:${entry.name}:${reason}`); ctx.log('WARNING', 'taims-download-failed', { archive: entry.name, reason });
       if (/invalid-official-archive-members|zip-/.test(reason)) {
-        index.archives[entry.name] = { name: entry.name, id: entry.id, url: entry.url, serviceDate: entry.serviceDate, serviceDateRule: 'publication-minus-4', bytes, sha256: '', zipOk: false, hasRouteTable: false, members: [], downloadedAt: new Date().toISOString(), lastHeadBytes: bytes, source: 'download' };
+        index.archives[entry.name] = { name: entry.name, id: entry.id, url: entry.url, serviceDate: entry.serviceDate, serviceDateRule: 'publication-minus-4', bytes, sha256: '', zipOk: false, hasRouteTable: false, hasStationTable: false, members: [], downloadedAt: new Date().toISOString(), lastHeadBytes: bytes, source: 'download', memberRule: MEMBER_RULE };
         await writeTaimsIndex(ctx.store, index, ctx.runId);
       }
     }
@@ -223,7 +232,7 @@ export async function writeStatus(store: Store, report: RefreshReport, manifest:
     const consecutiveFailures = promoted || !due ? 0 : notRefreshed ? (before?.consecutiveFailures ?? 0) + 1 : before?.consecutiveFailures ?? 0;
     const state: ModelStatus['state'] = expired ? 'expired' : promoted ? 'ok' : outcome ? (outcome.status === 'blocked' ? 'blocked' : outcome.status === 'skipped' ? 'skipped' : 'failed')
       : waitingReason?.startsWith('blocked:') ? 'blocked' : due ? 'due' : 'ok';
-    const lastAttempt = outcome ? { evaluationDate: weekly ? report.busGroup?.evaluationDate ?? null : null, outcome: outcome.status, reason: outcome.reason, at: now, runId: report.runId,
+    const lastAttempt = outcome ? { evaluationDate: weekly ? (outcome.details?.retriedFromAttempt as string | undefined) ?? report.busGroup?.evaluationDate ?? null : null, outcome: outcome.status, reason: outcome.reason, at: now, runId: report.runId,
       // The numbers behind a re-validation are what the health page shows for "why is this model still in service".
       ...(outcome.status === 'revalidated' && outcome.details ? { details: outcome.details } : {}) } : before?.lastAttempt ?? null;
     models[key] = { version: entry?.version ?? null, expiresAt, refreshOpensAt: opens,

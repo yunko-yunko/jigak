@@ -13,12 +13,22 @@ export const TAG_MEMBER = 'VW_KSCC_DX_CARD.csv', STOP_MEMBER = 'VW_KSCC_DH_CARD.
 /** The archive name is the publication date; rows are the service day four days earlier (checked on STDR_DE during preparation). */
 export const PUBLICATION_LAG_DAYS = 4;
 export const RETAIN_SERVICE_DAYS = 18;
+/**
+ * Version of the member rule below. An archive refused for its members records the rule that refused it, so a newer rule
+ * checks it again instead of skipping it until T-DATA republishes a different size.
+ * 2 (11-06): the station table became optional; TAIMS_20261106 (service day 11-02) arrived with DO but without DV.
+ */
+export const MEMBER_RULE = 2;
 const HEADERS = { 'User-Agent': 'Jigakjido-model-refresh/1.0', Referer: TDATA_CATALOG };
 
 export interface CatalogEntry { name: string; id: string; url: string; publicationDate: string; serviceDate: string }
 export interface TaimsIndexEntry {
   name: string; id: string; url: string; serviceDate: string; serviceDateRule: 'publication-minus-4';
   bytes: number; sha256: string; zipOk: boolean; hasRouteTable: boolean; members: string[]; downloadedAt: string; lastHeadBytes?: number; source?: 'download' | 'linked';
+  /** Whether the archive carries the subway station table (DV). Absent on entries written before rule 2, which required it. */
+  hasStationTable?: boolean;
+  /** The member rule an archive was checked (or refused) under; absent means rule 1. */
+  memberRule?: number;
 }
 export interface TaimsIndex { version: 'jigak-taims-index-v1'; updatedAt: string; archives: Record<string, TaimsIndexEntry> }
 
@@ -84,11 +94,21 @@ export async function zipMembers(path: string): Promise<string[]> {
   } finally { await handle.close(); }
 }
 
+/**
+ * The day's tags (DX) and stops (DH) are required. The route table (DO) and the subway station table (DV) are reference tables
+ * that T-DATA publishes on some days only (TAIMS_20261105 carried DV without DO, TAIMS_20261106 DO without DV); a day without
+ * one borrows it from a nearby day during preparation. Each may appear at most once.
+ */
 export function inspectMembers(members: string[]) {
   const count = (name: string) => members.filter(member => member === name).length;
-  const required = [TAG_MEMBER, STOP_MEMBER, STATION_MEMBER];
-  return { usable: required.every(name => count(name) === 1) && count(ROUTE_MEMBER) <= 1, hasRouteTable: count(ROUTE_MEMBER) === 1 };
+  return {
+    usable: count(TAG_MEMBER) === 1 && count(STOP_MEMBER) === 1 && count(ROUTE_MEMBER) <= 1 && count(STATION_MEMBER) <= 1,
+    hasRouteTable: count(ROUTE_MEMBER) === 1, hasStationTable: count(STATION_MEMBER) === 1,
+  };
 }
+
+/** Archives indexed under rule 1 had to carry the station table, so a missing flag means it is there. */
+export const hasStationTable = (entry: Pick<TaimsIndexEntry, 'hasStationTable'>) => entry.hasStationTable !== false;
 
 export async function readTaimsIndex(store: Store): Promise<TaimsIndex> {
   return await readJson<TaimsIndex>(store.taimsIndex) ?? { version: 'jigak-taims-index-v1', updatedAt: new Date(0).toISOString(), archives: {} };
@@ -116,7 +136,8 @@ export async function downloadArchive(store: Store, entry: CatalogEntry, expecte
       const sha256 = await sha256File(partial);
       await rename(partial, destination);
       return { name: entry.name, id: entry.id, url: entry.url, serviceDate: entry.serviceDate, serviceDateRule: 'publication-minus-4', bytes: expectedBytes, sha256,
-        zipOk: true, hasRouteTable: check.hasRouteTable, members, downloadedAt: new Date().toISOString(), lastHeadBytes: expectedBytes, source: 'download' };
+        zipOk: true, hasRouteTable: check.hasRouteTable, hasStationTable: check.hasStationTable, members, downloadedAt: new Date().toISOString(), lastHeadBytes: expectedBytes,
+        source: 'download', memberRule: MEMBER_RULE };
     } catch (error) {
       await rm(partial, { force: true });
       const message = errorMessage(error);
@@ -152,8 +173,8 @@ export async function linkExistingArchives(store: Store, directories: string[], 
     seen.add(name);
     const publication = `${name.slice(6, 10)}-${name.slice(10, 12)}-${name.slice(12, 14)}`, catalogEntry = byName.get(name);
     linked.push({ name, id: catalogEntry?.id ?? 'unknown', url: catalogEntry?.url ?? `${TDATA_ORIGIN}/dataprovide/download.do?id=0`, serviceDate: addDays(publication, -PUBLICATION_LAG_DAYS),
-      serviceDateRule: 'publication-minus-4', bytes: (await stat(target)).size, sha256: await sha256File(target), zipOk: true, hasRouteTable: check.hasRouteTable, members,
-      downloadedAt: new Date().toISOString(), source: 'linked' });
+      serviceDateRule: 'publication-minus-4', bytes: (await stat(target)).size, sha256: await sha256File(target), zipOk: true, hasRouteTable: check.hasRouteTable,
+      hasStationTable: check.hasStationTable, members, downloadedAt: new Date().toISOString(), source: 'linked', memberRule: MEMBER_RULE });
   }
   return linked;
 }

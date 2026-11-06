@@ -15,18 +15,19 @@ const cards = Array.from({ length: 3000 }, (_, index) => `fixture-private-card-$
 const rail = { TRCR_ID: cards[0], RIDE_DTM: '20261010083000', SERIAL_NUM: '1', TRNC_ID: 'fixture-private-transfer', TRNS_MNS_CD: '201', TRTR_FCNT: '0', ROUTE_ID: '', RIDE_BSST_ID: '0150', ALGH_DTM: '20261010084000', ALGH_BSST_ID: '0151', STDR_DE: '20261010' };
 const bus = { ...rail, RIDE_DTM: '20261010084200', ALGH_DTM: '20261010085200', SERIAL_NUM: '2', TRNS_MNS_CD: '115', TRTR_FCNT: '1', ROUTE_ID: 'public-route', RIDE_BSST_ID: 'public-stop-a', ALGH_BSST_ID: 'public-stop-b' };
 
-function fixture(batches: Record<string, string>[][]) {
+function fixture(batches: Record<string, string>[][], options: { withoutStationTable?: number[] } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'public-rail-journeys-'));
   mkdirSync(join(directory, 'data', 'public-source'), { recursive: true });
   const inputs = batches.map((rows, index) => {
     const input = join(directory, 'data', 'public-source', `archive-${index}.zip`);
+    const stationTable = options.withoutStationTable?.includes(index) ? [] : [['VW_KSCC_DV_CARD.csv', ['OUT_STN_NUM', 'STN_KR_NM', 'USE_YN'], [['0150', '서울역', 'Y'], ['0151', '시청', 'Y']]]];
     const made = spawnSync(PYTHON_COMMAND, ['-X', 'utf8', '-c', `import csv,io,json,zipfile,sys
 data=json.load(sys.stdin)
 with zipfile.ZipFile(sys.argv[1],'w',compression=zipfile.ZIP_DEFLATED) as z:
  for name,headers,rows in data:
   f=io.StringIO(newline='');w=csv.writer(f);w.writerow(headers);w.writerows(rows);z.writestr(name,f.getvalue().encode('utf-8-sig'))
 `, input], { input: JSON.stringify([
-      ['VW_KSCC_DV_CARD.csv', ['OUT_STN_NUM', 'STN_KR_NM', 'USE_YN'], [['0150', '서울역', 'Y'], ['0151', '시청', 'Y']]],
+      ...stationTable,
       ['VW_KSCC_DH_CARD.csv', ['ROUTE_ID', 'BSST_ID', 'BSST_NM', 'BSST_ORDER', 'BSST_SUM_DISTANCE'], [['public-route', 'public-stop-a', '시청앞', '2', '1000'], ['public-route', 'public-stop-b', '광화문', '5', '4000']]],
       ['VW_KSCC_DO_CARD.csv', ['ROUTE_ID', 'ROUTE_NUM'], [['public-route', '701']]],
       ['VW_KSCC_DX_CARD.csv', columns, rows.map(row => columns.map(key => row[key] ?? ''))],
@@ -133,4 +134,27 @@ test('chains split across the 04:00 source boundary are refused rather than trea
     assert.equal(manifest.crossDateSplitChainRowsPurged, 1);
     assert.equal(f.rows(f.railOutput).length, 2, 'separate genuine gate elapsed labels remain valid');
   } finally { f.cleanup(); }
+});
+
+test('a day published without the station table borrows the nearest one under the nearest-consistent policy, and says so', () => {
+  // TAIMS_20261106 (service day 11-02) arrived without VW_KSCC_DV_CARD.csv; the day before carried it.
+  const nextRail = { ...rail, RIDE_DTM: '20261011083000', ALGH_DTM: '20261011084000', STDR_DE: '20261011' };
+  const nextBus = { ...bus, RIDE_DTM: '20261011084200', ALGH_DTM: '20261011085200', STDR_DE: '20261011' };
+  const f = fixture([[rail, bus], [nextRail, nextBus]], { withoutStationTable: [1] });
+  try {
+    const strict = f.run(); assert.notEqual(strict.status, 0); assert.match(strict.stderr, /required_members_missing_or_duplicate/);
+    assert.equal(existsSync(f.railOutput), false, 'without the policy nothing is borrowed or written');
+    const result = f.run(['--route-table-policy', 'nearest-consistent', '--execute']); assert.equal(result.status, 0, result.stdout + result.stderr);
+    const gates = f.rows(f.railOutput);
+    assert.deepEqual(gates.map(row => [row.sourceDate, row.originName, row.destinationName]), [['2026-10-10', '서울역', '시청'], ['2026-10-11', '서울역', '시청']]);
+    const manifest = JSON.parse(readFileSync(f.railOutput + '.manifest.json', 'utf8'));
+    assert.equal(manifest.stationTableFallbacks.length, 1);
+    assert.deepEqual([manifest.stationTableFallbacks[0].sourceDate, manifest.stationTableFallbacks[0].missingMember, manifest.stationTableFallbacks[0].borrowedFrom.sourceDate],
+      ['2026-10-11', 'VW_KSCC_DV_CARD.csv', '2026-10-10']);
+  } finally { f.cleanup(); }
+  const none = fixture([[rail, bus]], { withoutStationTable: [0] });
+  try {
+    const result = none.run(['--route-table-policy', 'nearest-consistent', '--execute']);
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /station_table_unavailable/); assert.equal(existsSync(none.railOutput), false);
+  } finally { none.cleanup(); }
 });

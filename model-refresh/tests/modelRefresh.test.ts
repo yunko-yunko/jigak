@@ -10,16 +10,17 @@ import { SPATIAL_BICYCLE_GROUPS } from '../../src/common/engine/intelligence/spa
 import { crossCheckHolidays, parseKoreanHolidayIcal, refreshHolidayCalendars, type FetchLike } from '../scripts/model-refresh/holidays';
 import { compare, writeSpatialBusPredictions, type IncumbentComparison, type IncumbentGate } from '../scripts/model-refresh/incumbent';
 import { buildBundle, bundleSources, initStore } from '../scripts/model-refresh/init';
-import { effectiveExpiry, promote, readManifest, revalidate, rollback, verifyManifest, writeManifest } from '../scripts/model-refresh/manifest';
-import { attemptBusGroup, bicycleDue, incumbentGate, keepIncumbent, openAttemptDates, referencePath, withReference, type AttemptRecord, type MemberOutcome, type RunContext } from '../scripts/model-refresh/pipelines';
+import { effectiveExpiry, extendModelCalendar, promote, readManifest, revalidate, revalidateWithExtendedCalendar, rollback, verifyManifest, writeManifest } from '../scripts/model-refresh/manifest';
+import { attemptBusGroup, bicycleDue, incumbentGate, keepIncumbent, openAttemptDates, referencePath, retryCalendarExtension, withReference, type AttemptRecord, type MemberOutcome, type RunContext } from '../scripts/model-refresh/pipelines';
 import { calendarEndOf, LATE_SERVICE_MS, MAX_MODEL_AGE_MS, servingCalendarLastDate } from '../scripts/model-refresh/calendar-span';
-import { holidayAsSunday, parseKoreanHolidayFiles, seoulDate } from '../../src/common/engine/intelligence/korean-holidays';
+import { holidayAsSunday, holidayCalendarSlice, parseKoreanHolidayFiles, seoulDate } from '../../src/common/engine/intelligence/korean-holidays';
+import { RAIL_GATE_FEATURE_NAMES, RAIL_GATE_GROUPS } from '../../src/common/engine/intelligence/rail-gate-model';
 import { parseSpatialBusCheckpoint, predictSpatialBusEnvelope, spatialBusFeatures, SPATIAL_BUS_FEATURE_NAMES, SPATIAL_BUS_GROUPS, SPATIAL_BUS_V3, type SpatialBusInput } from '../../src/common/engine/intelligence/spatial-bus-model';
 import { createHash } from 'node:crypto';
 import { spawnRunner, type StepRequest, type StepResult } from '../scripts/model-refresh/process';
 import { chooseEvaluationDate, nextScheduledAt, planRouteTables, publicBusReproducible, trainingWindow, weeklyTiming } from '../scripts/model-refresh/schedule';
 import { acquireLock, heartbeat, releaseLock, Store, LOCK_STALE_MS } from '../scripts/model-refresh/store';
-import { downloadArchive, inspectMembers, parseCatalog, pruneArchives, TDATA_CATALOG, TDATA_ORIGIN, zipMembers, type TaimsIndex, type TaimsIndexEntry } from '../scripts/model-refresh/taims';
+import { downloadArchive, hasStationTable, inspectMembers, MEMBER_RULE, parseCatalog, pruneArchives, readTaimsIndex, TDATA_CATALOG, TDATA_ORIGIN, writeTaimsIndex, zipMembers, type TaimsIndex, type TaimsIndexEntry } from '../scripts/model-refresh/taims';
 import { retain, runRefresh } from '../scripts/model-refresh/run';
 import { addDays, createLogger } from '../scripts/model-refresh/util';
 
@@ -152,9 +153,58 @@ data = open(sys.argv[1] + '/full.zip', 'rb').read(); open(sys.argv[1] + '/cut.zi
     assert.equal(made.status, 0, made.stderr);
     const members = await zipMembers(join(directory, 'full.zip'));
     assert.deepEqual(members.sort(), ['VW_KSCC_DH_CARD.csv', 'VW_KSCC_DV_CARD.csv', 'VW_KSCC_DX_CARD.csv']);
-    assert.deepEqual(inspectMembers(members), { usable: true, hasRouteTable: false });
+    assert.deepEqual(inspectMembers(members), { usable: true, hasRouteTable: false, hasStationTable: true });
     await assert.rejects(zipMembers(join(directory, 'cut.zip')), /zip-end-record-missing/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('the station table is optional like the route table: T-DATA published 11-01 without DO and 11-02 without DV', () => {
+  // The member lists of TAIMS_20261105 (service day 11-01) and TAIMS_20261106 (service day 11-02) as published.
+  const day1101 = ['VW_KSCC_DV_CARD.csv', 'VW_KSCC_DC_CARD.csv', 'VW_KSCC_DH_CARD.csv', 'VW_KSCC_DD_CARD.csv', 'VW_KSCC_DX_CARD.csv'];
+  const day1102 = ['VW_KSCC_DO_CARD.csv', 'VW_KSCC_DC_CARD.csv', 'VW_KSCC_DH_CARD.csv', 'VW_KSCC_DD_CARD.csv', 'VW_KSCC_DX_CARD.csv'];
+  assert.deepEqual(inspectMembers(day1101), { usable: true, hasRouteTable: false, hasStationTable: true });
+  assert.deepEqual(inspectMembers(day1102), { usable: true, hasRouteTable: true, hasStationTable: false });
+  assert.equal(inspectMembers(day1102.filter(name => name !== 'VW_KSCC_DX_CARD.csv')).usable, false, 'the tags stay required');
+  assert.equal(inspectMembers(day1102.filter(name => name !== 'VW_KSCC_DH_CARD.csv')).usable, false, 'the stops stay required');
+  assert.equal(inspectMembers([...day1101, 'VW_KSCC_DV_CARD.csv']).usable, false, 'a repeated table is refused');
+  assert.equal(hasStationTable({}), true, 'an index row written under rule 1 had to carry the table');
+  assert.equal(hasStationTable({ hasStationTable: false }), false);
+});
+
+test('an archive refused under an older member rule is fetched and checked again; one refused under the current rule waits for a new size', async () => {
+  const root = temporary(), store = new Store(join(root, 'store'));
+  const entry = { name: 'TAIMS_20261106.zip', id: '16095', url: `${TDATA_ORIGIN}/dataprovide/download.do?id=16095` };
+  const made = spawnSync(PYTHON_COMMAND, ['-X', 'utf8', '-c', `
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_DEFLATED) as z:
+    for name in ['VW_KSCC_DO_CARD.csv', 'VW_KSCC_DC_CARD.csv', 'VW_KSCC_DH_CARD.csv', 'VW_KSCC_DD_CARD.csv', 'VW_KSCC_DX_CARD.csv']: z.writestr(name, 'A,B\\n1,2\\n')
+`, join(root, 'archive.zip')], { encoding: 'utf8' });
+  assert.equal(made.status, 0, made.stderr);
+  const bytes = readFileSync(join(root, 'archive.zip'));
+  let gets = 0;
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    if (url.startsWith(TDATA_CATALOG)) return { status: 200, url, text: async () => `<option value="${entry.id}">${entry.name}</option>` };
+    if (init?.method === 'HEAD') return { status: 200, url, headers: new Headers({ 'content-length': String(bytes.length) }) };
+    gets++; return { status: 200, url: entry.url, body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array(bytes)); controller.close(); } }) };
+  }) as unknown as typeof fetch;
+  // What the 09:30 run on 11-06 left: the archive refused for its members, the same size still published.
+  const refusedUnder = (rule?: number) => writeTaimsIndex(store, { version: 'jigak-taims-index-v1', updatedAt: '', archives: { [entry.name]: {
+    name: entry.name, id: entry.id, url: entry.url, serviceDate: '2026-11-02', serviceDateRule: 'publication-minus-4', bytes: bytes.length, sha256: '', zipOk: false,
+    hasRouteTable: false, members: [], downloadedAt: '', lastHeadBytes: bytes.length, source: 'download', ...(rule ? { memberRule: rule } : {}) } } }, 'seed');
+  const run = () => runRefresh({ storeRoot: store.root, projectDir: resolve('.'), workBase: join(root, 'work'), now: () => kst('2026-11-02T09:30:00'), fetchImpl, skipHolidays: true,
+    runner: async () => { throw new Error('no trainer may start without a window'); }, python: 'python', log: quiet() });
+  try {
+    mkdirSync(store.root, { recursive: true });
+    await promote(store, 'bicycleRide', bicycleCheckpoint(kst('2026-10-29T18:17:00'), kst('2026-11-09T18:17:00')), { runId: 'p', now: kst('2026-10-29T18:18:00') });
+    await refusedUnder();
+    const report = await run();
+    assert.deepEqual(report.taims.downloaded, [entry.name]); assert.equal(gets, 1);
+    const fetched = (await readTaimsIndex(store)).archives[entry.name];
+    assert.deepEqual([fetched.zipOk, fetched.hasRouteTable, fetched.hasStationTable, fetched.memberRule], [true, true, false, MEMBER_RULE]);
+    await refusedUnder(MEMBER_RULE);
+    const again = await run();
+    assert.deepEqual(again.taims.downloaded, []); assert.equal(gets, 1, 'not fetched again while T-DATA publishes the same size');
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('preparation borrows the nearest earlier route table only when it agrees with the two before it', () => {
@@ -761,6 +811,142 @@ test('a bundle carries the store\'s re-validation of exactly the same bytes, and
     assert.deepEqual((await initStore(other, fromBundle, { runId: 'i2', now })).revalidated, []);
     assert.equal((await readManifest(other))!.models.bicycleRide!.expiresAt, trained + 7 * DAY_MS);
     assert.equal((await verifyManifest(fresh, now)).ok, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+const SHIPPED_HOLIDAYS = resolve('..', 'src', 'common', 'engine', 'realtime', 'data');
+const shippedCalendar = () => parseKoreanHolidayFiles(['2026', '2027'].map(year => readFileSync(join(SHIPPED_HOLIDAYS, `korea-holidays-${year}.json`), 'utf8')));
+/** The 10-30 rail gate case: a file whose holiday slice was cut at promotion (through 11/07) while the reviewed calendar now reaches further. */
+function shortSliceCheckpoint(trained: number, lastDate: string, holidays?: string[]) {
+  const model = JSON.parse(bicycleCheckpoint(trained, trained + 7 * DAY_MS, 0, lastDate));
+  model.calendar.holidays = holidays ?? holidayCalendarSlice(shippedCalendar(), model.calendar.firstDate, lastDate)!.holidays;
+  return JSON.stringify(model) + '\n';
+}
+
+test('a model held back only by the holiday slice in its file is re-validated on a re-cut slice: same model, new bytes, reference carried', async () => {
+  // Trained 10/30 23:45 with a slice through 11/07; on 11/06 the reviewed calendar (2026 until 11/15) covers trainedAt + 28 days.
+  const root = temporary(), store = new Store(join(root, 'store')), trained = kst('2026-10-30T23:45:00'), now = kst('2026-11-06T16:08:00');
+  mkdirSync(store.root, { recursive: true });
+  const ctx = { store, runId: 'run-x', now: () => now, log: quiet(), holidayDir: SHIPPED_HOLIDAYS } as unknown as RunContext;
+  try {
+    const text = shortSliceCheckpoint(trained, '2026-11-07');
+    const promoted = await promote(store, 'bicycleRide', text, { runId: 'p1', now: trained + 60_000 });
+    const manifest = (await readManifest(store))!;
+    // As production: the entry was already extended once, to the slice's end, so plain re-validation can add nothing.
+    await writeManifest(store, manifest, { runId: 'r0', models: { ...manifest.models, bicycleRide: { ...manifest.models.bicycleRide!, expiresAt: kst('2026-11-07T20:00:00') } }, calendars: manifest.calendars });
+    await assert.rejects(revalidate(store, 'bicycleRide', { runId: 'r1', now, evaluationDate: '2026-11-02', sha256: promoted.object.sha256, candidate: 'c', evidence: {} }), /revalidation-limit-reached:calendar-end/);
+    mkdirSync(join(store.root, 'references', 'bicycleRide'), { recursive: true });
+    writeFileSync(referencePath(store, 'bicycleRide', promoted.object.sha256), JSON.stringify({ version: 'jigak-incumbent-reference-v1', model: 'bicycleRide', checkpointSha256: promoted.object.sha256, trainRows: 3 }) + '\n');
+
+    const kept = await keepIncumbent(ctx, 'bicycleRide', text, '2026-11-02', { status: 'closed', reason: 'gate:worse-than-incumbent' }, incumbentComparison(), async () => gateResult());
+    assert.equal(kept.status, 'revalidated', kept.reason);
+    const details = kept.details as { expiresAt: number; sha256: string; calendarExtended: { fromSha256: string; previousLastDate: string; lastDate: string; addedHolidays: string[] } };
+    assert.equal(details.expiresAt, now + 7 * DAY_MS, 'run time + the normal life, no longer cut by the calendar');
+    assert.deepEqual([details.calendarExtended.fromSha256, details.calendarExtended.previousLastDate, details.calendarExtended.lastDate, details.calendarExtended.addedHolidays],
+      [promoted.object.sha256, '2026-11-07', '2026-11-28', []], 'through trainedAt + 28 days (+4 h of late boardings); no holiday falls in the added weeks');
+    const entry = (await readManifest(store))!.models.bicycleRide!;
+    assert.notEqual(entry.sha256, promoted.object.sha256); assert.equal(entry.sha256, details.sha256);
+    assert.deepEqual([entry.trainedAt, entry.promotedAt, entry.history.length, entry.revalidations![0].calendarExtended?.lastDate], [promoted.object.parsed.trainedAt, trained + 60_000, 0, '2026-11-28'], 'not a new model: promotion time and history stay');
+    const served = readFileSync(store.path(entry.path), 'utf8'), before = JSON.parse(text), after = JSON.parse(served);
+    assert.deepEqual({ ...after, calendar: null }, { ...before, calendar: null }, 'only the calendar differs');
+    assert.deepEqual([after.calendar.firstDate, after.calendar.lastDate, after.calendar.holidays], [before.calendar.firstDate, '2026-11-28', before.calendar.holidays]);
+    assert.equal(readFileSync(store.legacy('bicycleRide'), 'utf8'), served, 'the fixed-name copy follows');
+    const carried = JSON.parse(readFileSync(referencePath(store, 'bicycleRide', entry.sha256), 'utf8'));
+    assert.deepEqual([carried.checkpointSha256, carried.carriedFromCheckpointSha256, carried.trainRows], [entry.sha256, promoted.object.sha256, 3], 'the reference names the new bytes, as the gate and bundles require');
+    assert.equal(await effectiveExpiry(store, entry), now + 7 * DAY_MS);
+    assert.equal((await verifyManifest(store, now)).ok, true);
+    // The next passing day extends the new bytes the ordinary way (no further re-cut needed).
+    const next = await revalidate(store, 'bicycleRide', { runId: 'r2', now: now + DAY_MS, evaluationDate: '2026-11-03', sha256: entry.sha256, candidate: 'c', evidence: {} });
+    assert.equal(next.entry.sha256, entry.sha256); assert.equal(next.entry.expiresAt, now + 8 * DAY_MS);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('the slice is never re-cut when the reviewed calendar disagrees with it, reaches no further, or is past review', async () => {
+  const root = temporary(), store = new Store(join(root, 'store')), trained = kst('2026-10-30T23:45:00'), now = kst('2026-11-06T16:08:00'), calendar = shippedCalendar();
+  mkdirSync(store.root, { recursive: true });
+  try {
+    // A holiday the file never knew inside its own days: its day types would change, so no extension.
+    const wrong = shortSliceCheckpoint(trained, '2026-11-07', ['2026-06-03']);
+    assert.throws(() => extendModelCalendar(wrong, calendar, { trainedAt: trained, expiresAt: kst('2026-11-07T20:00:00'), now }), /holiday-calendar-changed-since-promotion/);
+    const right = shortSliceCheckpoint(trained, '2026-11-07');
+    // Already through the longest life: nothing to add.
+    assert.equal(extendModelCalendar(shortSliceCheckpoint(trained, '2026-11-28'), calendar, { trainedAt: trained, expiresAt: kst('2026-11-07T20:00:00'), now }), null);
+    // 2026 past its review deadline (11/15): the extension is refused rather than trusting an unreviewed slice.
+    assert.equal(extendModelCalendar(right, calendar, { trainedAt: trained, expiresAt: kst('2026-11-07T20:00:00'), now: kst('2026-11-16T05:30:00') }), null);
+    // Through the store: a refused re-cut leaves the manifest as it was.
+    const promoted = await promote(store, 'bicycleRide', wrong, { runId: 'p1', now: trained + 60_000 });
+    const generation = (await readManifest(store))!.generation;
+    await assert.rejects(revalidateWithExtendedCalendar(store, 'bicycleRide', { runId: 'r', now, evaluationDate: '2026-11-02', sha256: promoted.object.sha256, candidate: 'c', evidence: {}, holidays: calendar }), /holiday-calendar-changed-since-promotion/);
+    assert.equal((await readManifest(store))!.generation, generation);
+    const ctx = { store, runId: 'run-y', now: () => now, log: quiet(), holidayDir: SHIPPED_HOLIDAYS } as unknown as RunContext;
+    const manifest = (await readManifest(store))!;
+    await writeManifest(store, manifest, { runId: 'r0', models: { ...manifest.models, bicycleRide: { ...manifest.models.bicycleRide!, expiresAt: kst('2026-11-07T20:00:00') } }, calendars: manifest.calendars });
+    const kept = await keepIncumbent(ctx, 'bicycleRide', wrong, '2026-11-02', { status: 'closed', reason: 'gate:worse-than-incumbent' }, incumbentComparison(), async () => gateResult());
+    assert.equal(kept.status, 'closed'); assert.match(kept.reason, /gate:worse-than-incumbent\+revalidation-refused:holiday-calendar-changed-since-promotion/);
+    const refusedDetails = kept.details as { incumbentGate: { passed: boolean }; incumbentSha256: string };
+    assert.deepEqual([refusedDetails.incumbentGate.passed, refusedDetails.incumbentSha256], [true, promoted.object.sha256], 'a refusal keeps what the gate measured, and for which bytes');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+/** A served rail gate file shaped like production's 10-30 model: own life 7 days, holiday slice cut at 11/07. */
+function railCheckpoint(trainedAt: number, lastDate: string) {
+  const N = RAIL_GATE_FEATURE_NAMES.length, firstDate = '2026-10-16';
+  return JSON.stringify({ version: 'seoul-rail-gate-v1', deployment: 'production', target: 'rail-gate-elapsed', trainedAt, expiresAt: trainedAt + 7 * DAY_MS,
+    trainingThrough: '2026-10-22', lastEvaluatedServiceDate: '2026-10-25', featureNames: [...RAIL_GATE_FEATURE_NAMES], featureQuantizationDecimals: 6,
+    models: { lower: leaf(240), median: leaf(420), upper: leaf(700) }, secondsPerMeter: 0.4, priorRows: 5,
+    encodings: { pairs: [['서울역', '숙대입구(서울시교육청)', Math.log(420), 21]], origins: [['서울역', 0.12, 900]], destinations: [['숙대입구(서울시교육청)', 0.2, 300]] },
+    calendar: { rule: 'korean-public-holiday-as-sunday', firstDate, lastDate, holidays: holidayCalendarSlice(shippedCalendar(), firstDate, lastDate)!.holidays },
+    conformal: RAIL_GATE_GROUPS.map(group => ({ group, logLower: 0, logUpper: 0 })), labelUncertaintySeconds: 60,
+    domain: { minimum: Array(N).fill(-1000), maximum: Array(N).fill(1000) }, evaluation: {},
+    source: { experiment: 'unit', protocolSha256: 'a'.repeat(64), modelSha256: 'b'.repeat(64) }, limitations: ['unit'] }) + '\n';
+}
+
+test('a run with no new day finishes the extension an earlier day earned but the holiday slice refused, once, for the model that was measured', async () => {
+  const root = temporary(), store = new Store(join(root, 'store')), trained = kst('2026-10-30T00:45:00'), now = kst('2026-11-06T17:00:00');
+  mkdirSync(store.root, { recursive: true });
+  const ctx = { store, runId: 'run-z', now: () => now, log: quiet(), holidayDir: SHIPPED_HOLIDAYS } as unknown as RunContext;
+  try {
+    const text = railCheckpoint(trained, '2026-11-07');
+    const promoted = await promote(store, 'railGate', text, { runId: 'p1', now: trained + 60_000 });
+    let manifest = (await readManifest(store))!;
+    manifest = await writeManifest(store, manifest, { runId: 'r0', models: { ...manifest.models, railGate: { ...manifest.models.railGate!, expiresAt: kst('2026-11-07T20:00:00'), revalidatedAt: kst('2026-11-02T03:22:00') } }, calendars: manifest.calendars });
+    // No attempt on record: nothing to finish.
+    assert.equal(await retryCalendarExtension(ctx, 'railGate'), null);
+
+    const record = (members: Record<string, unknown>, updatedAt = kst('2026-11-06T16:08:00')) => ({ version: 'jigak-refresh-attempt-v1', group: 'bus', evaluationDate: '', inputsSha256: 'x',
+      startedAt: updatedAt - 3_600_000, updatedAt, runIds: ['20261106T1608-y6v8'], status: 'finished', members });
+    const write = (date: string, members: Record<string, unknown>, updatedAt?: number) => { const folder = join(store.root, 'candidates', 'bus', date); mkdirSync(folder, { recursive: true });
+      writeFileSync(join(folder, 'attempt.json'), JSON.stringify({ ...record(members, updatedAt), evaluationDate: date })); };
+    const REFUSED = 'gate:worse-than-incumbent+revalidation-refused:revalidation-limit-reached:calendar-end';
+    // Exactly what production's 11/06 16:08 run wrote (the old keepIncumbent kept only the candidate comparison).
+    const production = { railGate: { status: 'closed', reason: REFUSED, details: { comparison: { reason: 'worse-than-incumbent', commonRows: 9994 } } } };
+    // Refused for another reason, or a recorded gate that failed: not retried.
+    write('2026-11-02', { railGate: { status: 'closed', reason: 'gate:worse-than-incumbent' } }); assert.equal(await retryCalendarExtension(ctx, 'railGate'), null);
+    write('2026-11-02', { railGate: { status: 'closed', reason: REFUSED, details: { incumbentGate: { passed: false } } } }); assert.equal(await retryCalendarExtension(ctx, 'railGate'), null);
+    // Recorded for other bytes, or (no sha recorded) written before the model in service changed: another model was measured.
+    write('2026-11-02', { railGate: { status: 'closed', reason: REFUSED, details: { incumbentGate: { passed: true }, incumbentSha256: 'f'.repeat(64) } } }); assert.equal(await retryCalendarExtension(ctx, 'railGate'), null);
+    write('2026-11-02', production, kst('2026-11-02T03:00:00')); assert.equal(await retryCalendarExtension(ctx, 'railGate'), null);
+    // A newer day measured the model and it failed: the older refusal is not used.
+    write('2026-11-02', production);
+    write('2026-11-03', { railGate: { status: 'closed', reason: 'gate:worse-than-incumbent', details: { incumbentGate: { passed: false } } } }, kst('2026-11-06T16:30:00'));
+    assert.equal(await retryCalendarExtension(ctx, 'railGate'), null);
+    // A newer day that never reached the model (blocked data, or closed after its retries without a measurement) does not hide it.
+    write('2026-11-03', { railGate: { status: 'closed', reason: 'retries-exhausted:train-rail-gate:exit-1' } }, kst('2026-11-06T16:30:00'));
+    write('2026-11-04', { railGate: { status: 'blocked', reason: 'window-incomplete' } }, kst('2026-11-06T16:40:00'));
+    const dir = join(store.root, 'candidates', 'bus', '2026-11-02');
+    // The production case.
+    const outcome = await retryCalendarExtension(ctx, 'railGate');
+    assert.equal(outcome?.status, 'revalidated'); assert.equal(outcome?.reason, 'gate:worse-than-incumbent');
+    const entry = (await readManifest(store))!.models.railGate!;
+    assert.deepEqual([entry.expiresAt, entry.revalidations![0].calendarExtended?.lastDate, entry.revalidations![0].evaluationDate], [now + 7 * DAY_MS, '2026-11-27', '2026-11-02']);
+    assert.notEqual(entry.sha256, promoted.object.sha256);
+    const served = JSON.parse(readFileSync(store.path(entry.path), 'utf8'));
+    assert.deepEqual({ ...served, calendar: null }, { ...JSON.parse(text), calendar: null }, 'trees, encodings and calibration unchanged');
+    const saved = JSON.parse(readFileSync(join(dir, 'attempt.json'), 'utf8'));
+    assert.equal(saved.members.railGate.status, 'revalidated');
+    // Once: the record now says revalidated, and the entry changed after it anyway.
+    assert.equal(await retryCalendarExtension(ctx, 'railGate'), null);
+    assert.equal((await verifyManifest(store, now)).ok, true);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -43,6 +43,14 @@ Cloud Run 서비스 jigakmap-api
 - 갱신 창은 만료 120시간 전에 열립니다. 실패하면 다음 실행과 다음 평가일에 다시 시도하고, 남은 시간이 48시간 아래인데 실패하면 Job이 exit 2로 끝나 경보가 갑니다.
 - 기존 모델은 새 모델이 기준을 통과해 승격될 때까지 그대로 서빙됩니다. 새 모델이 진 날에는 아래 "재검증"으로 기존 모델의 만료를 늘립니다. 그래도 못 바꾸면 만료 뒤 서버가 지금처럼 공급자·시간표 시간으로 돌아가고, health는 `degraded`로 보입니다.
 
+### T-DATA 묶음(TAIMS)에 든 표 (11/06 바뀜)
+
+- 하루 묶음에는 교통카드 태그(`VW_KSCC_DX_CARD.csv`)와 정류장(`VW_KSCC_DH_CARD.csv`)이 꼭 있어야 합니다. 노선표(`VW_KSCC_DO_CARD.csv`)와 지하철 역 기준표(`VW_KSCC_DV_CARD.csv`)는 T-DATA가 날마다 넣거나 빼므로 없어도 받습니다. 예: `TAIMS_20261105`(운행일 11/01)에는 `DV`만, `TAIMS_20261106`(11/02)에는 `DO`만 있었습니다. 같은 표가 두 번 들어 있으면 거부합니다.
+- 노선표가 없는 날은 앞쪽의 일관된 노선표를 빌립니다(`nearest-consistent`). 역 기준표가 없는 날은 학습 창과 참조 묶음 가운데 가장 가까운 날(같은 거리면 앞쪽)의 역 기준표를 빌리고, 지하철 준비 결과 manifest의 `stationTableFallbacks`에 남깁니다. 역 번호와 이름은 거의 바뀌지 않습니다. 버스 준비는 역 기준표를 쓰지 않습니다.
+- 창 안에 역 기준표가 하나도 없으면 지하철만 `station-table-unavailable`로 막히고 버스 모델은 그대로 학습합니다. `strict` 정책에서는 역 기준표가 없는 날이 있으면 지하철이 `station-table-missing:<날짜>`로 막힙니다.
+- 묶음 색인은 `hasStationTable`과 검사 규칙 번호 `memberRule`을 남깁니다. 11/06 전의 규칙 1은 역 기준표를 필수로 봤고, 그 규칙으로 거부된 묶음(`memberRule`이 없음)은 다음 실행에서 다시 내려받아 지금 규칙(`MEMBER_RULE` 2)으로 검사합니다. 지금 규칙으로 거부된 묶음은 T-DATA가 다른 크기로 다시 올릴 때까지 받지 않습니다.
+- 11/06 증상: 규칙 1이 `TAIMS_20261106`을 거부해 11/02가 든 14일 창이 모두 `blocked:window-incomplete:1`이 됐고, 지하철 모델(만료 11/07 20:00)과 공개 버스 갱신이 함께 멈췄습니다. 기록: `docs/worklog/2026-11-06/model-refresh-station-table.md`(모노레포).
+
 ## 서버가 하는 일 (`src/common/engine/intelligence/model-manifest.ts`)
 
 환경변수 (모두 비어 있으면 예전 `ETA_*_PATH` 고정 경로 방식 그대로입니다):

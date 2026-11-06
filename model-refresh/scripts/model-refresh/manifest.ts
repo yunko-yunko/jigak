@@ -6,7 +6,8 @@ import { parseRailGateCheckpoint } from '../../../src/common/engine/intelligence
 import { parseSpatialBicycleCheckpoint } from '../../../src/common/engine/intelligence/spatial-bicycle-ride';
 import { MeasuredBicycleRides } from '../../../src/common/engine/realtime/bicycle-ride-times';
 import { MODEL_KEYS, Store, type ModelKey } from './store';
-import { calendarEndOf, MAX_MODEL_AGE_MS } from './calendar-span';
+import { holidayCalendarSlice, holidayReviewProblems, type KoreanHolidayCalendar } from '../../../src/common/engine/intelligence/korean-holidays';
+import { calendarEndOf, MAX_MODEL_AGE_MS, servingCalendarLastDate } from './calendar-span';
 import { DAY, kstIso, kstStamp, sha256File, sha256Text, writeAtomic, writeJsonAtomic } from './util';
 
 export const MANIFEST_SCHEMA = 'jigak-model-manifest-v1' as const;
@@ -22,7 +23,11 @@ export interface Revalidation {
   at: number; runId: string; evaluationDate: string; previousExpiresAt: number | null; expiresAt: number; candidate: string; evidence: Record<string, unknown>;
   /** Set when now + 7 days was cut; calendarLastDate is the last day the file's holiday calendar names. */
   clippedBy?: ExpiryLimit | null; calendarLastDate?: string | null;
+  /** Set when the file's holiday slice was re-cut from the reviewed calendar to allow this extension (the model itself is unchanged). */
+  calendarExtended?: CalendarExtension;
 }
+/** The served file was replaced by the same model with a longer holiday slice: which bytes it came from and how far the slice now reaches. */
+export interface CalendarExtension { fromSha256: string; fromPath: string; previousLastDate: string; lastDate: string; addedHolidays: string[] }
 export interface ManifestModel {
   version: string; path: string; sha256: string; bytes: number; trainedAt: number | null; expiresAt: number | null;
   evaluationDate: string | null; promotedAt: number; runId: string; gates: Record<string, unknown>; history: HistoryEntry[];
@@ -153,6 +158,61 @@ export async function revalidate(store: Store, key: ModelKey, options: { runId: 
   const entry: ManifestModel = { ...current, expiresAt, revalidatedAt: now, revalidationCount: (current.revalidationCount ?? 0) + 1,
     revalidations: [record, ...(current.revalidations ?? [])].slice(0, REVALIDATION_LOG_LIMIT) };
   const manifest = await writeManifest(store, previous, { runId: options.runId, models: { ...previous.models, [key]: entry }, calendars: previous.calendars }, now);
+  return { manifest, entry, record };
+}
+
+/**
+ * The same model file with only its holiday slice re-cut from the reviewed calendar, through the longest life the manifest may
+ * give it (calendar-span's servingCalendarLastDate, as the promoters cut it). A model whose slice was cut short at promotion
+ * because the next weeks were not yet reviewed can then be re-validated once they are. Everything but calendar.lastDate and
+ * calendar.holidays stays as it was; the days the old slice already covered must name exactly the same holidays, otherwise
+ * the model's day types would change under it and this refuses. null when the reviewed calendar reaches no further.
+ */
+export function extendModelCalendar(text: string, holidays: KoreanHolidayCalendar, options: { trainedAt: number | null; expiresAt: number | null; now: number }) {
+  const model = JSON.parse(text) as Record<string, unknown> & { calendar?: { rule?: unknown; firstDate?: unknown; lastDate?: unknown; holidays?: unknown } };
+  const calendar = model.calendar;
+  if (!calendar || typeof calendar.firstDate !== 'string' || typeof calendar.lastDate !== 'string' || !Array.isArray(calendar.holidays) || options.trainedAt === null) return null;
+  const servedUntil = Math.max(options.expiresAt ?? -Infinity, typeof model.expiresAt === 'number' ? model.expiresAt : -Infinity);
+  if (!Number.isFinite(servedUntil)) return null;
+  const lastDate = servingCalendarLastDate(holidays, calendar.firstDate, options.trainedAt, servedUntil, options.now);
+  if (lastDate <= calendar.lastDate || holidayReviewProblems(holidays, calendar.firstDate, lastDate, options.now).length) return null;
+  const slice = holidayCalendarSlice(holidays, calendar.firstDate, lastDate);
+  if (!slice || slice.rule !== calendar.rule) return null;
+  const previousLastDate = calendar.lastDate, covered = slice.holidays.filter(day => day <= previousLastDate);
+  if (JSON.stringify(covered) !== JSON.stringify(calendar.holidays)) throw new Error('holiday-calendar-changed-since-promotion');
+  const extended = { ...model, calendar: { ...calendar, lastDate, holidays: slice.holidays } };
+  return { text: JSON.stringify(extended) + (text.endsWith('\n') ? '\n' : ''), previousLastDate, lastDate, addedHolidays: slice.holidays.filter(day => day > previousLastDate) };
+}
+
+/**
+ * Re-validation when the only limit was the holiday slice inside the file (revalidation-limit-reached:calendar-end): the slice
+ * is re-cut from the reviewed calendar (extendModelCalendar), the new bytes are stored and parsed by the server parser like any
+ * promotion, and the manifest entry points at them with the extended expiry. Trees, calibration and every other field are
+ * byte-for-byte the model that just passed the gate again; history is untouched (this is not a new model).
+ */
+export async function revalidateWithExtendedCalendar(store: Store, key: ModelKey, options: { runId: string; now?: number; evaluationDate: string; sha256: string; candidate: string; evidence: Record<string, unknown>; holidays: KoreanHolidayCalendar }) {
+  const now = options.now ?? Date.now(), previous = await readManifest(store), current = previous?.models[key];
+  if (!previous || !current) throw new Error('no-active-model');
+  if (current.sha256 !== options.sha256) throw new Error('revalidation-model-changed');
+  const text = await readFile(store.path(current.path), 'utf8');
+  if (sha256Text(text) !== current.sha256) throw new Error('revalidation-sha-mismatch');
+  const before = parseModelText(key, text, now);
+  const extension = extendModelCalendar(text, options.holidays, { trainedAt: current.trainedAt, expiresAt: current.expiresAt, now });
+  if (!extension) throw new Error('revalidation-limit-reached:calendar-end:reviewed-calendar-not-longer');
+  const strip = (value: string) => { const { calendar: _calendar, ...rest } = JSON.parse(value) as Record<string, unknown>; return JSON.stringify(rest); };
+  if (strip(extension.text) !== strip(text)) throw new Error('calendar-extension-changed-model');
+  const object = await storeModelObject(store, key, extension.text, options.runId, now);
+  if (object.parsed.version !== before.version || object.parsed.trainedAt !== before.trainedAt) throw new Error('calendar-extension-changed-model');
+  const ceiling = expiryCeiling(current.trainedAt, extension.text), requested = now + MODEL_LIFE_MS, expiresAt = Math.min(requested, ceiling.at);
+  const clippedBy = expiresAt < requested ? ceiling.by : null;
+  if (current.expiresAt !== null && expiresAt <= current.expiresAt) throw new Error(`revalidation-limit-reached${clippedBy ? `:${clippedBy}` : ''}`);
+  const calendarExtended: CalendarExtension = { fromSha256: current.sha256, fromPath: current.path, previousLastDate: extension.previousLastDate, lastDate: extension.lastDate, addedHolidays: extension.addedHolidays };
+  const record: Revalidation = { at: now, runId: options.runId, evaluationDate: options.evaluationDate, previousExpiresAt: current.expiresAt, expiresAt, candidate: options.candidate, evidence: options.evidence,
+    clippedBy, calendarLastDate: ceiling.calendarLastDate, calendarExtended };
+  const entry: ManifestModel = { ...current, path: object.rel, sha256: object.sha256, bytes: object.bytes, expiresAt, revalidatedAt: now, revalidationCount: (current.revalidationCount ?? 0) + 1,
+    revalidations: [record, ...(current.revalidations ?? [])].slice(0, REVALIDATION_LOG_LIMIT) };
+  const manifest = await writeManifest(store, previous, { runId: options.runId, models: { ...previous.models, [key]: entry }, calendars: previous.calendars }, now);
+  await copyLegacy(store, key, object.rel, options.runId);
   return { manifest, entry, record };
 }
 

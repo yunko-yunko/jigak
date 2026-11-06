@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import collections
 import concurrent.futures
+import datetime as dt
 import functools
 import hashlib
 import hmac
@@ -41,12 +42,46 @@ def digest(key: bytes, *parts: str) -> str:
     return hmac.new(key, "|".join(parts).encode(), hashlib.sha256).hexdigest()
 
 
-def metadata(archive: zipfile.ZipFile, route_numbers: dict | None = None):
+def station_table(archive: zipfile.ZipFile) -> dict:
     stations = collections.defaultdict(set)
     for row in base.table(archive, STATION_MEMBER, {"OUT_STN_NUM", "STN_KR_NM", "USE_YN"}):
         if base.clean(row, "USE_YN") == "Y":
             stations[base.clean(row, "OUT_STN_NUM")].add(base.clean(row, "STN_KR_NM"))
-    station_names = {code: next(iter(names)) for code, names in stations.items() if code and len(names) == 1 and next(iter(names))}
+    return {code: next(iter(names)) for code, names in stations.items() if code and len(names) == 1 and next(iter(names))}
+
+
+def nearest_station_tables(items: list[dict], references: list[dict]) -> list[dict]:
+    """A day published without its subway station table (T-DATA left VW_KSCC_DV_CARD.csv out of TAIMS_20261106) reads
+    station names from the nearest day that has one, the earlier on a tie. Station numbers and names change rarely; each
+    borrowing is recorded in the manifest. Items missing a table gain stationNames."""
+    sources = sorted((item for item in [*items, *references] if item["hasStationTable"]), key=lambda item: item["sourceDate"])
+    fallbacks, tables = [], {}
+    for item in items:
+        if item["hasStationTable"]:
+            continue
+        if not sources:
+            raise base.PreparationError("station_table_unavailable")
+        day = dt.date.fromisoformat(item["sourceDate"])
+        chosen = None
+        # Nearest first; a table that yields no usable station falls through to the next nearest.
+        for source in sorted(sources, key=lambda source: (abs((dt.date.fromisoformat(source["sourceDate"]) - day).days), source["sourceDate"] > item["sourceDate"])):
+            if source["sha256"] not in tables:
+                with zipfile.ZipFile(source["path"]) as archive:
+                    tables[source["sha256"]] = station_table(archive)
+            if tables[source["sha256"]]:
+                chosen = source
+                break
+        if chosen is None:
+            raise base.PreparationError("station_table_unavailable")
+        item["stationNames"] = tables[chosen["sha256"]]
+        fallbacks.append({"sourceDate": item["sourceDate"], "archiveSha256": item["sha256"], "missingMember": STATION_MEMBER,
+                          "borrowedFrom": {"sourceDate": chosen["sourceDate"], "archiveSha256": chosen["sha256"]}})
+    return fallbacks
+
+
+def metadata(archive: zipfile.ZipFile, route_numbers: dict | None = None, station_names: dict | None = None):
+    # Borrowed by nearest_station_tables for a day published without its station table.
+    station_names = dict(station_names) if station_names is not None else station_table(archive)
     stops = collections.defaultdict(set)
     invalid_stops = set()
     for row in base.table(archive, base.STOP_MEMBER, {"ROUTE_ID", "BSST_ID", "BSST_NM", "BSST_ORDER", "BSST_SUM_DISTANCE"}):
@@ -70,15 +105,16 @@ def metadata(archive: zipfile.ZipFile, route_numbers: dict | None = None):
     return station_names, stop_data, numbers
 
 
-def inspect(path: Path, allow_missing_route_table: bool = False) -> dict:
+def inspect(path: Path, allow_missing_route_table: bool = False, allow_missing_station_table: bool = False) -> dict:
     if not path.is_file() or not 0 < path.stat().st_size <= MAX_ARCHIVE_BYTES:
         raise base.PreparationError("archive_size_bound")
     with path.open("rb") as source:
         sha = hashlib.file_digest(source, "sha256").hexdigest()
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
-        if any(names.count(name) != 1 for name in [base.TAG_MEMBER, base.STOP_MEMBER, STATION_MEMBER]) or names.count(base.ROUTE_MEMBER) > 1 \
-                or names.count(base.ROUTE_MEMBER) == 0 and not allow_missing_route_table:
+        if any(names.count(name) != 1 for name in [base.TAG_MEMBER, base.STOP_MEMBER]) or names.count(base.ROUTE_MEMBER) > 1 or names.count(STATION_MEMBER) > 1 \
+                or names.count(base.ROUTE_MEMBER) == 0 and not allow_missing_route_table \
+                or names.count(STATION_MEMBER) == 0 and not allow_missing_station_table:
             raise base.PreparationError("required_members_missing_or_duplicate")
         if sum(member.file_size for member in archive.infolist()) > base.MAX_UNCOMPRESSED_BYTES:
             raise base.PreparationError("uncompressed_size_bound")
@@ -92,7 +128,8 @@ def inspect(path: Path, allow_missing_route_table: bool = False) -> dict:
                 break
     if len(dates) != 1:
         raise base.PreparationError("nonunique_source_date")
-    return {"path": path, "sourceDate": next(iter(dates)), "sha256": sha, "bytes": path.stat().st_size, "hasRouteTable": names.count(base.ROUTE_MEMBER) == 1}
+    return {"path": path, "sourceDate": next(iter(dates)), "sha256": sha, "bytes": path.stat().st_size, "hasRouteTable": names.count(base.ROUTE_MEMBER) == 1,
+            "hasStationTable": names.count(STATION_MEMBER) == 1}
 
 
 def leg_for(row: dict, station_names: dict, stops: dict, numbers: dict, start: int | None, end: int | None, date: str):
@@ -150,7 +187,7 @@ def prepare_day(item: dict, key: bytes, cap: int) -> dict:
         def selected_card(raw_card: str) -> bool:
             return hashlib.sha256(("rail-journey-card-selection-v1|" + raw_card).encode()).digest()[0] % 64 == 0
         with zipfile.ZipFile(item["path"]) as archive:
-            stations, stops, numbers = metadata(archive, item.get("routeNumbers"))
+            stations, stops, numbers = metadata(archive, item.get("routeNumbers"), item.get("stationNames"))
             for row in base.table(archive, base.TAG_MEMBER, REQUIRED):
                 counts["inputRows"] += 1
                 if base.clean(row, "STDR_DE") != date.replace("-", ""):
@@ -254,7 +291,7 @@ def prepare(inputs: list[Path], rail_output: Path, journey_output: Path, cap: in
     if not 1 <= len(inputs) <= 14 or not 1 <= cap <= MAX_ROWS_PER_TARGET_DAY or not 1 <= workers <= 2:
         raise base.PreparationError("preparation_count_bound")
     borrow = route_table_policy == "nearest-consistent"
-    inspected = [inspect(path, borrow) for path in inputs]
+    inspected = [inspect(path, borrow, borrow) for path in inputs]
     if len({item["sha256"] for item in inspected}) != len(inspected):
         raise base.PreparationError("duplicate_archive_sha")
     if len({item["sourceDate"] for item in inspected}) != len(inspected):
@@ -262,7 +299,9 @@ def prepare(inputs: list[Path], rail_output: Path, journey_output: Path, cap: in
     if sum(item["bytes"] for item in inspected) > MAX_TOTAL_BYTES:
         raise base.PreparationError("total_source_size_bound")
     inspected.sort(key=lambda item: item["sourceDate"])
-    fallbacks = base.nearest_consistent_route_numbers(inspected, [inspect(path, True) for path in references or []]) if borrow else []
+    reference_items = [inspect(path, True, True) for path in references or []] if borrow else []
+    fallbacks = base.nearest_consistent_route_numbers(inspected, reference_items) if borrow else []
+    station_fallbacks = nearest_station_tables(inspected, reference_items) if borrow else []
     key = secrets.token_bytes(32)
     results = []
     with concurrent.futures.ProcessPoolExecutor(max_workers=min(workers, len(inspected))) as executor:
@@ -318,7 +357,7 @@ def prepare(inputs: list[Path], rail_output: Path, journey_output: Path, cap: in
                 "crossDateGroupsPurged": purged, "timestampPrecision": "minute", "uncertaintySeconds": 60,
                 "targets": {"rail": "rail-gate-elapsed", "chain": "transit-chain-elapsed"}, "railRows": len(rail_rows), "chainRows": len(chain_rows),
                 "initialAndFinalWalkingObserved": False, "transferGapWalkingWaitSplitObserved": False, "publicRailRouteDistanceAvailable": False,
-                "runtimeModelActivated": False, "routeNumberFallbacks": fallbacks}
+                "runtimeModelActivated": False, "routeNumberFallbacks": fallbacks, "stationTableFallbacks": station_fallbacks}
     encoded_rail = [json.dumps(row, ensure_ascii=True, separators=(",", ":")) for row in rail_rows]
     encoded_chain = [json.dumps(row, ensure_ascii=True, separators=(",", ":")) for row in chain_rows]
     if sum(len(line.encode()) + 1 for line in encoded_rail + encoded_chain) > MAX_OUTPUT_BYTES:
@@ -346,7 +385,7 @@ def main() -> int:
     parser.add_argument("--max-rows-per-date", type=int, default=MAX_ROWS_PER_TARGET_DAY)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--route-table-policy", choices=("nearest-consistent",),
-                        help="let a day published without its route table borrow the nearest earlier consistent table")
+                        help="let a day published without its route table borrow the nearest earlier consistent table, and a day without its station table the nearest station table")
     parser.add_argument("--route-table-reference", action="append", default=[], help="earlier archive read only for its route table")
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
